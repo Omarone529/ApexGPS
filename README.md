@@ -1,6 +1,5 @@
 # ApexGPS - Servizio API Back-end
 
-[![pipeline status](https://gitlab.com/{user}/{repo}/badges/main/pipeline.svg)](https://gitlab.com/{user}/{repo}/-/commits/main)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Made with-Django](https://img.shields.io/badge/Backend-Django-092E20?logo=django&logoColor=white)
 ![API-DRF](https://img.shields.io/badge/API-DRF-FF5432?logo=djangorestframework&logoColor=white)
