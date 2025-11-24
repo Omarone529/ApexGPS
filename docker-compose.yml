@@ -1,9 +1,9 @@
-version: '3.8'
-
 services:
   # PostGIS + pgRouting
   db:
-    image: postgis/postgis:14-3.4
+    # Docker will use the Dockerfile inside './db'
+    build: ./db
+
     volumes:
       - pgdata:/var/lib/postgresql/data
 
@@ -16,7 +16,7 @@ services:
       - "5432:5432"
 
   web:
-    # Create image using Dockerfile
+    # Usa Dockerfile inside the root project for installing GDAL
     build: .
     volumes:
       - .:/app
