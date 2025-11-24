@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  # PostGIS + pgRouting
+  db:
+    image: postgis/postgis:14-3.4
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+    environment:
+      POSTGRES_DB: apex_gps_db
+      POSTGRES_USER: django_user
+      POSTGRES_PASSWORD: strong_password
+
+    ports:
+      - "5432:5432"
+
+  web:
+    # Create image using Dockerfile
+    build: .
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+    command: python manage.py runserver 0.0.0.0:8000
+    environment:
+      DATABASE_URL: postgres://django_user:strong_password@db:5432/apex_gps_db
+volumes:
+  pgdata:
