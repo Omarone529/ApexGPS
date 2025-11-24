@@ -81,7 +81,7 @@ WSGI_APPLICATION = "apexgps.wsgi.application"
 
 DATABASES = {
     'default': dj_database_url.config(
-        default=os.environ.get('DATABASE_URL'),
+        default=os.environ.get('DB_URL'),
         conn_max_age=600
     )
 }
@@ -119,6 +119,8 @@ USE_I18N = True
 
 USE_TZ = True
 
+GDAL_LIBRARY_PATH = '/usr/lib/libgdal.so'
+GEOS_LIBRARY_PATH = '/usr/lib/libgeos_c.so'
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/

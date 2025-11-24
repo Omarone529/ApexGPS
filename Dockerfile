@@ -1,12 +1,13 @@
 FROM python:3.10-slim
 WORKDIR /app
-# Installing system dependencies (GDAL, PostGIS libs, etc.)
+# Installing system dependencies for GeoDjango
 RUN apt-get update && apt-get install -y \
     libpq-dev \
     gcc \
     libgdal-dev \
     libproj-dev \
-    # cache cleaning
+    binutils \
+    # cache cleaning \
     && rm -rf /var/lib/apt/lists/*
 
 # install requirements.txt
