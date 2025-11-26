@@ -1,0 +1,31 @@
+services:
+  # PostGIS + pgRouting
+  db:
+    # Docker will use the Dockerfile inside './db'
+    build: ./db
+
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+
+    ports:
+      - "5432:5432"
+
+  web:
+    # Use Dockerfile inside the root project for installing GDAL
+    build: .
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+    command: python manage.py runserver 0.0.0.0:8000
+    environment:
+      DATABASE_URL: ${DB_URL}
+volumes:
+  pgdata:
