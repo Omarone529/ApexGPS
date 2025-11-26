@@ -1,5 +1,4 @@
-"""
-ASGI config for apexgps project.
+"""ASGI config for apexgps project.
 
 It exposes the ASGI callable as a module-level variable named ``application``.
 
