@@ -1,0 +1,37 @@
+[lint]
+preview = true
+select = [
+    "B",    # flake8-bugbear
+    "D",    # pydocstyle
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort
+    "PIE",  # flake8-pie
+    "Q",    # flake8-quotes
+    "SIM",  # flake8-simplify
+    "UP",   # pyupgrade
+    "W",    # pycodestyle warnings
+]
+
+ignore = [
+    "D100",  # Missing docstring in public module
+    "D104",  # Missing docstring in public package
+]
+
+[lint.pydocstyle]
+convention = "google"
+
+[lint.isort]
+section-order = [
+    "future",
+    "standard-library",
+    "third-party",
+    "first-party",
+    "local-folder",
+]
+
+[lint.per-file-ignores]
+"__init__.py" = ["D104"]
+"manage.py" = ["D"]
+"*/migrations/*" = ["D", "F501"]
+"*/tests/*" = ["D"]

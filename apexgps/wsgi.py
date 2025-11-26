@@ -1,5 +1,4 @@
-"""
-WSGI config for apexgps project.
+"""WSGI config for apexgps project.
 
 It exposes the WSGI callable as a module-level variable named ``application``.
 

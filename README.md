@@ -28,7 +28,7 @@ Il calcolo del percorso è gestito da una funzione di costo custom all'interno d
 La funzione di costo C per ogni segmento stradale è definita come:
 Csegmento​=(α⋅Distanza)−(β⋅Stotale​)
 
-S totale​ (Punteggio Panoramico) è un valore pre-calcolato che combina: 
+S totale​ (Punteggio Panoramico) è un valore pre-calcolato che combina:
 - Sinuosità (curve)
 - Variazione di Altitudine
 - Prossimità ai POI.
