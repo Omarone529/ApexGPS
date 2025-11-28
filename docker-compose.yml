@@ -31,6 +31,5 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       DB_HOST: db
       DB_PORT: 5432
-
 volumes:
   pgdata:
