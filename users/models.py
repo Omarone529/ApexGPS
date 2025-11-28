@@ -44,7 +44,6 @@ class CustomUser(AbstractUser):
     )
 
     class Meta:
-        """Meta class for CustomUser"""
         verbose_name = _('ApexGPS User')
         verbose_name_plural = _('ApexGPS Users')
 
