@@ -80,15 +80,17 @@ WSGI_APPLICATION = "apexgps.wsgi.application"
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
 DATABASES = {
-    "default": dj_database_url.config(
-        default=os.environ.get("DB_URL"),
-        conn_max_age=600
-    )
+    "default": {
+        "ENGINE": "django.contrib.gis.db.backends.postgis",
+        "NAME": os.environ.get("DB_NAME"),
+        "USER": os.environ.get("DB_USER"),
+        "PASSWORD": os.environ.get("DB_PASSWORD"),
+        "HOST": os.environ.get("DB_HOST"),
+        "PORT": os.environ.get("DB_PORT"),
+    }
 }
 
-if ("default" in DATABASES and DATABASES["default"].get("ENGINE") !=
-        "django.contrib.gis.db.backends.postgis"):
-    DATABASES["default"]["ENGINE"] = "django.contrib.gis.db.backends.postgis"
+# Rimuovi i check obbligatori per le env variables
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
@@ -124,8 +126,8 @@ USE_I18N = True
 
 USE_TZ = True
 
-GDAL_LIBRARY_PATH = "/usr/lib/libgdal.so"
-GEOS_LIBRARY_PATH = "/usr/lib/libgeos_c.so"
+GDAL_LIBRARY_PATH = "/usr/lib/x86_64-linux-gnu/libgdal.so"
+GEOS_LIBRARY_PATH = "/usr/lib/x86_64-linux-gnu/libgeos_c.so"
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
