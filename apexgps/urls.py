@@ -18,9 +18,15 @@ Including another URLconf
 
 from django.contrib import admin
 from django.urls import path, include
+from .api_root import APIRootView
 
 urlpatterns = [
+    #admin panel
     path('admin/', admin.site.urls),
+    #API root
+    path('api/', APIRootView.as_view(), name='api-root'),
+    #apps
     path('api/users/', include('users.urls')),
+    #auth
     path('api/auth/', include('rest_framework.urls')),
 ]
