@@ -23,7 +23,7 @@ class PointOfInterest(models.Model):
     location = models.PointField(
         srid=4326,
         verbose_name="Posizione GPS",
-        help_text="Coordinate geografiche in formato WGS84"
+        help_text="Coordinate geografiche in formato WGS84 (latitudine, longitudine)"
     )
 
     description = models.TextField(
@@ -69,7 +69,7 @@ class ScenicArea(models.Model):
     bonus_value = models.FloatField(
         default=1.0,
         verbose_name="Valore Bonus",
-        help_text="Moltiplicatore per il punteggio panoramico"
+        help_text="Moltiplicatore per il punteggio panoramico (es. 1.5 per +50%)"
     )
 
     area = models.MultiPolygonField(
@@ -103,28 +103,28 @@ class RoadSegment(models.Model):
     osm_id = models.BigIntegerField(
         blank=True,
         null=True,
-        verbose_name="ID OSM",
-        help_text="Identificativo OpenStreetMap originale"
+        verbose_name="ID OpenStreetMap",
+        help_text="Identificativo originale da OpenStreetMap"
     )
 
     name = models.CharField(
         max_length=255,
         blank=True,
         null=True,
-        verbose_name="Nome Strada",
+        verbose_name="Nome della Strada",
         help_text="Nome ufficiale o comune della strada"
     )
 
     # Geometry
     geometry = models.LineStringField(
         srid=4326,
-        verbose_name="Geometria",
-        help_text="Tracciato della strada in formato LineString"
+        verbose_name="Tracciato",
+        help_text="Percorso della strada in formato LineString"
     )
 
     length_m = models.FloatField(
         default=0.0,
-        verbose_name="Lunghezza (m)",
+        verbose_name="Lunghezza (metri)",
         help_text="Lunghezza effettiva del segmento in metri"
     )
 
@@ -133,8 +133,8 @@ class RoadSegment(models.Model):
         max_length=50,
         blank=True,
         null=True,
-        verbose_name="Tipo Strada",
-        help_text="Classificazione secondo standard OpenStreetMap"
+        verbose_name="Tipo di Strada",
+        help_text="Classificazione secondo lo standard OpenStreetMap"
     )
 
     maxspeed = models.IntegerField(
@@ -162,32 +162,32 @@ class RoadSegment(models.Model):
     lanes = models.IntegerField(
         blank=True,
         null=True,
-        verbose_name="Corsie",
-        help_text="Numero di corsie (entrambi i sensi)"
+        verbose_name="Numero di Corsie",
+        help_text="Numero totale di corsie (entrambi i sensi)"
     )
 
     # Scenic metrics (calculated during data preparation)
     curvature = models.FloatField(
         default=1.0,
         verbose_name="Sinuosità",
-        help_text="Rapporto lunghezza effettiva / distanza euclidea (≥1.0)"
+        help_text="Rapporto tra lunghezza effettiva e distanza in linea d'aria (≥1.0)"
     )
 
     elevation_gain = models.FloatField(
         default=0.0,
-        verbose_name="Dislivello Positivo (m)",
+        verbose_name="Dislivello Positivo (metri)",
         help_text="Guadagno totale di elevazione lungo il segmento"
     )
 
     scenic_rating = models.FloatField(
         default=5.0,
         verbose_name="Valutazione Panoramica",
-        help_text="Punteggio di qualità panoramica (0.0-10.0)"
+        help_text="Punteggio di qualità panoramica da 0.0 (brutto) a 10.0 (eccezionale)"
     )
 
     poi_density = models.FloatField(
         default=0.0,
-        verbose_name="Densità POI",
+        verbose_name="Densità di Punti di Interesse",
         help_text="Numero di punti di interesse per chilometro"
     )
 
@@ -196,16 +196,16 @@ class RoadSegment(models.Model):
         blank=True,
         null=True,
         db_index=True,
-        verbose_name="Nodo Sorgente",
-        help_text="ID nodo di partenza nel grafo di routing"
+        verbose_name="Nodo di Partenza",
+        help_text="ID del nodo di partenza nel grafo di routing"
     )
 
     target = models.IntegerField(
         blank=True,
         null=True,
         db_index=True,
-        verbose_name="Nodo Destinazione",
-        help_text="ID nodo di arrivo nel grafo di routing"
+        verbose_name="Nodo di Arrivo",
+        help_text="ID del nodo di arrivo nel grafo di routing"
     )
 
     # Pre-calculated routing costs
@@ -218,13 +218,13 @@ class RoadSegment(models.Model):
     cost_time = models.FloatField(
         default=0.0,
         verbose_name="Costo per Tempo",
-        help_text="Costo basato sul tempo di percorrenza"
+        help_text="Costo basato sul tempo di percorrenza stimato"
     )
 
     cost_scenic = models.FloatField(
         default=0.0,
         verbose_name="Costo Panoramico",
-        help_text="Costo per ottimizzazione panoramica"
+        help_text="Costo per l'ottimizzazione panoramica"
     )
 
     class Meta:
@@ -237,7 +237,6 @@ class RoadSegment(models.Model):
         ]
 
     def __str__(self):
-        """Human-readable representation for admin interface."""
         if self.name:
             return f"{self.name} ({self.length_m:.0f}m)"
         elif self.osm_id:
