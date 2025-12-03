@@ -1,36 +1,49 @@
+version: '3.8'
+
 services:
   db:
     build: ./db
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     environment:
-      POSTGRES_DB: ${DB_NAME}
-      POSTGRES_USER: ${DB_USER}
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:-apexgps}
+      POSTGRES_USER: ${DB_USER:-apexuser}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-apexpassword}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --data-checksums"
     ports:
       - "5432:5432"
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}" ]
+      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER:-apexuser}" ]
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   web:
     build: .
     volumes:
       - .:/app
+      - /app/venv
     ports:
       - "8000:8000"
     depends_on:
       db:
         condition: service_healthy
-    command: python manage.py runserver 0.0.0.0:8000
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py runserver 0.0.0.0:8000"
     environment:
-      DB_NAME: ${DB_NAME}
-      DB_USER: ${DB_USER}
-      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME:-apexgps}
+      DB_USER: ${DB_USER:-apexuser}
+      DB_PASSWORD: ${DB_PASSWORD:-apexpassword}
       DB_HOST: db
       DB_PORT: 5432
+      PYTHONUNBUFFERED: 1
+      DJANGO_SETTINGS_MODULE: apexgps.settings
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
 
 volumes:
   pgdata:
