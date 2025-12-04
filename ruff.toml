@@ -33,5 +33,5 @@ section-order = [
 [lint.per-file-ignores]
 "__init__.py" = ["D104"]
 "manage.py" = ["D"]
-"*/migrations/*" = ["D", "F501"]
+"*/migrations/*" = ["D","F501", "E501"]
 "*/tests/*" = ["D"]
