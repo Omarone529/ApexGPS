@@ -21,12 +21,13 @@ from django.urls import path, include
 from .api_root import APIRootView
 
 urlpatterns = [
-    #admin panel
+    # admin panel
     path('admin/', admin.site.urls),
-    #API root
+    # API root
     path('api/', APIRootView.as_view(), name='api-root'),
-    #apps
+    # apps
     path('api/users/', include('users.urls')),
-    #auth
+    path('api/gis/', include('gis_data.urls')),
+    # auth
     path('api/auth/', include('rest_framework.urls')),
 ]
