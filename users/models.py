@@ -52,6 +52,52 @@ class CustomUser(AbstractUser):
         """Returns the username and their current role."""
         return f"{self.username} ({self.get_role_display()})"
 
+    @property
+    def is_visitor(self):
+        """Check if user has visitor role."""
+        return self.role == UserRoles.VISITOR
+
+    @property
+    def is_subscribed(self):
+        """Check if user has subscribed user privileges."""
+        return self.role == UserRoles.SUBSCRIBED
+
+    @property
     def is_administrator(self):
-        """Checks if the user has Administrator privileges."""
+        """Check if the user has Administrator privileges."""
+        return self.role == UserRoles.ADMIN
+
+    def can_view_public_routes(self):
+        """
+        Check if user can view public routes.
+        According to requirements: ALL users can view public routes.
+        """
+        return True
+
+    def can_create_private_routes(self):
+        """
+        Check if user can create private routes.
+        According to requirements: Only subscribed users and admins.
+        """
+        return self.role in [UserRoles.SUBSCRIBED, UserRoles.ADMIN]
+
+    def can_publish_routes(self):
+        """
+        Check if user can publish their routes.
+        According to requirements: Only subscribed users and admins.
+        """
+        return self.role in [UserRoles.SUBSCRIBED, UserRoles.ADMIN]
+
+    def can_moderate_content(self):
+        """
+        Check if user can moderate platform content.
+        According to requirements: Only administrators.
+        """
+        return self.role == UserRoles.ADMIN
+
+    def can_manage_users(self):
+        """
+        Check if user can manage other users.
+        According to requirements: Only administrators.
+        """
         return self.role == UserRoles.ADMIN
