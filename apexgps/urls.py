@@ -17,17 +17,18 @@ Including another URLconf
 """
 
 from django.contrib import admin
-from django.urls import path, include
+from django.urls import include, path
+
 from .api_root import APIRootView
 
 urlpatterns = [
     # admin panel
-    path('admin/', admin.site.urls),
+    path("admin/", admin.site.urls),
     # API root
-    path('api/', APIRootView.as_view(), name='api-root'),
+    path("api/", APIRootView.as_view(), name="api-root"),
     # apps
-    path('api/users/', include('users.urls')),
-    path('api/gis/', include('gis_data.urls')),
+    path("api/users/", include("users.urls")),
+    path("api/gis/", include("gis_data.urls")),
     # auth
-    path('api/auth/', include('rest_framework.urls')),
+    path("api/auth/", include("rest_framework.urls")),
 ]
