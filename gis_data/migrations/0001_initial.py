@@ -5,39 +5,81 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     initial = True
 
-    dependencies = [
-    ]
+    dependencies = []
 
     operations = [
         migrations.CreateModel(
-            name='PointOfInterest',
+            name="PointOfInterest",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('name', models.CharField(max_length=255, verbose_name='Nome del Punto')),
-                ('category', models.CharField(max_length=100, verbose_name='Categoria')),
-                ('location', django.contrib.gis.db.models.fields.PointField(srid=4326, verbose_name='Posizione GPS')),
-                ('description', models.TextField(blank=True, null=True, verbose_name='Descrizione')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "name",
+                    models.CharField(max_length=255, verbose_name="Nome del Punto"),
+                ),
+                (
+                    "category",
+                    models.CharField(max_length=100, verbose_name="Categoria"),
+                ),
+                (
+                    "location",
+                    django.contrib.gis.db.models.fields.PointField(
+                        srid=4326, verbose_name="Posizione GPS"
+                    ),
+                ),
+                (
+                    "description",
+                    models.TextField(blank=True, null=True, verbose_name="Descrizione"),
+                ),
             ],
             options={
-                'verbose_name': 'Point of Interest',
-                'verbose_name_plural': 'Point of Interests',
+                "verbose_name": "Point of Interest",
+                "verbose_name_plural": "Point of Interests",
             },
         ),
         migrations.CreateModel(
-            name='ScenicArea',
+            name="ScenicArea",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('name', models.CharField(max_length=255, verbose_name="Nome dell'Area")),
-                ('area_type', models.CharField(max_length=100, verbose_name='Tipo di Area')),
-                ('bonus_value', models.IntegerField(default=0, verbose_name='Valore Bonus')),
-                ('area', django.contrib.gis.db.models.fields.MultiPolygonField(srid=4326, verbose_name='Area Geografica')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "name",
+                    models.CharField(max_length=255, verbose_name="Nome dell'Area"),
+                ),
+                (
+                    "area_type",
+                    models.CharField(max_length=100, verbose_name="Tipo di Area"),
+                ),
+                (
+                    "bonus_value",
+                    models.IntegerField(default=0, verbose_name="Valore Bonus"),
+                ),
+                (
+                    "area",
+                    django.contrib.gis.db.models.fields.MultiPolygonField(
+                        srid=4326, verbose_name="Area Geografica"
+                    ),
+                ),
             ],
             options={
-                'verbose_name': 'Scenic Area',
-                'verbose_name_plural': 'Scenic Areas',
+                "verbose_name": "Scenic Area",
+                "verbose_name_plural": "Scenic Areas",
             },
         ),
     ]

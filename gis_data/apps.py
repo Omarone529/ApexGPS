@@ -2,5 +2,7 @@ from django.apps import AppConfig
 
 
 class GisDataConfig(AppConfig):
-    default_auto_field = 'django.db.models.BigAutoField'
-    name = 'gis_data'
+    """This class is used to define the GISDataConfig class."""
+
+    default_auto_field = "django.db.models.BigAutoField"
+    name = "gis_data"

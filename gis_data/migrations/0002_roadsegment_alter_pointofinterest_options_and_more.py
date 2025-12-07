@@ -5,106 +5,299 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('gis_data', '0001_initial'),
+        ("gis_data", "0001_initial"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='RoadSegment',
+            name="RoadSegment",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('osm_id', models.BigIntegerField(blank=True, help_text='Identificativo OpenStreetMap originale', null=True, verbose_name='ID OSM')),
-                ('name', models.CharField(blank=True, help_text='Nome ufficiale o comune della strada', max_length=255, null=True, verbose_name='Nome Strada')),
-                ('geometry', django.contrib.gis.db.models.fields.LineStringField(help_text='Tracciato della strada in formato LineString', srid=4326, verbose_name='Geometria')),
-                ('length_m', models.FloatField(default=0.0, help_text='Lunghezza effettiva del segmento in metri', verbose_name='Lunghezza (m)')),
-                ('highway', models.CharField(blank=True, help_text='Classificazione secondo standard OpenStreetMap', max_length=50, null=True, verbose_name='Tipo Strada')),
-                ('maxspeed', models.IntegerField(blank=True, help_text='Limite di velocità legale', null=True, verbose_name='Velocità Massima (km/h)')),
-                ('oneway', models.BooleanField(default=False, help_text='Indica se la strada è a senso unico', verbose_name='Senso Unico')),
-                ('surface', models.CharField(blank=True, help_text='Tipo di superficie stradale', max_length=50, null=True, verbose_name='Superficie')),
-                ('lanes', models.IntegerField(blank=True, help_text='Numero di corsie (entrambi i sensi)', null=True, verbose_name='Corsie')),
-                ('curvature', models.FloatField(default=1.0, help_text='Rapporto lunghezza effettiva / distanza euclidea (≥1.0)', verbose_name='Sinuosità')),
-                ('elevation_gain', models.FloatField(default=0.0, help_text='Guadagno totale di elevazione lungo il segmento', verbose_name='Dislivello Positivo (m)')),
-                ('scenic_rating', models.FloatField(default=5.0, help_text='Punteggio di qualità panoramica (0.0-10.0)', verbose_name='Valutazione Panoramica')),
-                ('poi_density', models.FloatField(default=0.0, help_text='Numero di punti di interesse per chilometro', verbose_name='Densità POI')),
-                ('source', models.IntegerField(blank=True, db_index=True, help_text='ID nodo di partenza nel grafo di routing', null=True, verbose_name='Nodo Sorgente')),
-                ('target', models.IntegerField(blank=True, db_index=True, help_text='ID nodo di arrivo nel grafo di routing', null=True, verbose_name='Nodo Destinazione')),
-                ('cost_length', models.FloatField(default=0.0, help_text='Costo basato sulla sola distanza (α=1, β=0)', verbose_name='Costo per Lunghezza')),
-                ('cost_time', models.FloatField(default=0.0, help_text='Costo basato sul tempo di percorrenza', verbose_name='Costo per Tempo')),
-                ('cost_scenic', models.FloatField(default=0.0, help_text='Costo per ottimizzazione panoramica', verbose_name='Costo Panoramico')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "osm_id",
+                    models.BigIntegerField(
+                        blank=True,
+                        help_text="Identificativo OpenStreetMap originale",
+                        null=True,
+                        verbose_name="ID OSM",
+                    ),
+                ),
+                (
+                    "name",
+                    models.CharField(
+                        blank=True,
+                        help_text="Nome ufficiale o comune della strada",
+                        max_length=255,
+                        null=True,
+                        verbose_name="Nome Strada",
+                    ),
+                ),
+                (
+                    "geometry",
+                    django.contrib.gis.db.models.fields.LineStringField(
+                        help_text="Tracciato della strada in formato LineString",
+                        srid=4326,
+                        verbose_name="Geometria",
+                    ),
+                ),
+                (
+                    "length_m",
+                    models.FloatField(
+                        default=0.0,
+                        help_text="Lunghezza effettiva del segmento in metri",
+                        verbose_name="Lunghezza (m)",
+                    ),
+                ),
+                (
+                    "highway",
+                    models.CharField(
+                        blank=True,
+                        help_text="Classificazione secondo standard OpenStreetMap",
+                        max_length=50,
+                        null=True,
+                        verbose_name="Tipo Strada",
+                    ),
+                ),
+                (
+                    "maxspeed",
+                    models.IntegerField(
+                        blank=True,
+                        help_text="Limite di velocità legale",
+                        null=True,
+                        verbose_name="Velocità Massima (km/h)",
+                    ),
+                ),
+                (
+                    "oneway",
+                    models.BooleanField(
+                        default=False,
+                        help_text="Indica se la strada è a senso unico",
+                        verbose_name="Senso Unico",
+                    ),
+                ),
+                (
+                    "surface",
+                    models.CharField(
+                        blank=True,
+                        help_text="Tipo di superficie stradale",
+                        max_length=50,
+                        null=True,
+                        verbose_name="Superficie",
+                    ),
+                ),
+                (
+                    "lanes",
+                    models.IntegerField(
+                        blank=True,
+                        help_text="Numero di corsie (entrambi i sensi)",
+                        null=True,
+                        verbose_name="Corsie",
+                    ),
+                ),
+                (
+                    "curvature",
+                    models.FloatField(
+                        default=1.0,
+                        help_text="Rapporto lunghezza effettiva / distanza euclidea (≥1.0)",
+                        verbose_name="Sinuosità",
+                    ),
+                ),
+                (
+                    "elevation_gain",
+                    models.FloatField(
+                        default=0.0,
+                        help_text="Guadagno totale di elevazione lungo il segmento",
+                        verbose_name="Dislivello Positivo (m)",
+                    ),
+                ),
+                (
+                    "scenic_rating",
+                    models.FloatField(
+                        default=5.0,
+                        help_text="Punteggio di qualità panoramica (0.0-10.0)",
+                        verbose_name="Valutazione Panoramica",
+                    ),
+                ),
+                (
+                    "poi_density",
+                    models.FloatField(
+                        default=0.0,
+                        help_text="Numero di punti di interesse per chilometro",
+                        verbose_name="Densità POI",
+                    ),
+                ),
+                (
+                    "source",
+                    models.IntegerField(
+                        blank=True,
+                        db_index=True,
+                        help_text="ID nodo di partenza nel grafo di routing",
+                        null=True,
+                        verbose_name="Nodo Sorgente",
+                    ),
+                ),
+                (
+                    "target",
+                    models.IntegerField(
+                        blank=True,
+                        db_index=True,
+                        help_text="ID nodo di arrivo nel grafo di routing",
+                        null=True,
+                        verbose_name="Nodo Destinazione",
+                    ),
+                ),
+                (
+                    "cost_length",
+                    models.FloatField(
+                        default=0.0,
+                        help_text="Costo basato sulla sola distanza (α=1, β=0)",
+                        verbose_name="Costo per Lunghezza",
+                    ),
+                ),
+                (
+                    "cost_time",
+                    models.FloatField(
+                        default=0.0,
+                        help_text="Costo basato sul tempo di percorrenza",
+                        verbose_name="Costo per Tempo",
+                    ),
+                ),
+                (
+                    "cost_scenic",
+                    models.FloatField(
+                        default=0.0,
+                        help_text="Costo per ottimizzazione panoramica",
+                        verbose_name="Costo Panoramico",
+                    ),
+                ),
             ],
             options={
-                'verbose_name': 'Segmento Stradale',
-                'verbose_name_plural': 'Segmenti Stradali',
+                "verbose_name": "Segmento Stradale",
+                "verbose_name_plural": "Segmenti Stradali",
             },
         ),
         migrations.AlterModelOptions(
-            name='pointofinterest',
-            options={'verbose_name': 'Punto di Interesse', 'verbose_name_plural': 'Punti di Interesse'},
+            name="pointofinterest",
+            options={
+                "verbose_name": "Punto di Interesse",
+                "verbose_name_plural": "Punti di Interesse",
+            },
         ),
         migrations.AlterModelOptions(
-            name='scenicarea',
-            options={'verbose_name': 'Area Scenica', 'verbose_name_plural': 'Aree Sceniche'},
+            name="scenicarea",
+            options={
+                "verbose_name": "Area Scenica",
+                "verbose_name_plural": "Aree Sceniche",
+            },
         ),
         migrations.AlterField(
-            model_name='pointofinterest',
-            name='category',
-            field=models.CharField(help_text='Classificazione del punto (es. monumento, lago, passo)', max_length=100, verbose_name='Categoria'),
+            model_name="pointofinterest",
+            name="category",
+            field=models.CharField(
+                help_text="Classificazione del punto (es. monumento, lago, passo)",
+                max_length=100,
+                verbose_name="Categoria",
+            ),
         ),
         migrations.AlterField(
-            model_name='pointofinterest',
-            name='description',
-            field=models.TextField(blank=True, help_text='Informazioni dettagliate sul punto di interesse', null=True, verbose_name='Descrizione'),
+            model_name="pointofinterest",
+            name="description",
+            field=models.TextField(
+                blank=True,
+                help_text="Informazioni dettagliate sul punto di interesse",
+                null=True,
+                verbose_name="Descrizione",
+            ),
         ),
         migrations.AlterField(
-            model_name='pointofinterest',
-            name='location',
-            field=django.contrib.gis.db.models.fields.PointField(help_text='Coordinate geografiche in formato WGS84', srid=4326, verbose_name='Posizione GPS'),
+            model_name="pointofinterest",
+            name="location",
+            field=django.contrib.gis.db.models.fields.PointField(
+                help_text="Coordinate geografiche in formato WGS84",
+                srid=4326,
+                verbose_name="Posizione GPS",
+            ),
         ),
         migrations.AlterField(
-            model_name='pointofinterest',
-            name='name',
-            field=models.CharField(help_text='Nome descrittivo del punto di interesse', max_length=255, verbose_name='Nome del Punto'),
+            model_name="pointofinterest",
+            name="name",
+            field=models.CharField(
+                help_text="Nome descrittivo del punto di interesse",
+                max_length=255,
+                verbose_name="Nome del Punto",
+            ),
         ),
         migrations.AlterField(
-            model_name='scenicarea',
-            name='area',
-            field=django.contrib.gis.db.models.fields.MultiPolygonField(help_text="Confini dell'area in formato poligonale", srid=4326, verbose_name='Area Geografica'),
+            model_name="scenicarea",
+            name="area",
+            field=django.contrib.gis.db.models.fields.MultiPolygonField(
+                help_text="Confini dell'area in formato poligonale",
+                srid=4326,
+                verbose_name="Area Geografica",
+            ),
         ),
         migrations.AlterField(
-            model_name='scenicarea',
-            name='area_type',
-            field=models.CharField(help_text="Classificazione dell'area scenica", max_length=100, verbose_name='Tipo di Area'),
+            model_name="scenicarea",
+            name="area_type",
+            field=models.CharField(
+                help_text="Classificazione dell'area scenica",
+                max_length=100,
+                verbose_name="Tipo di Area",
+            ),
         ),
         migrations.AlterField(
-            model_name='scenicarea',
-            name='bonus_value',
-            field=models.FloatField(default=1.0, help_text='Moltiplicatore per il punteggio panoramico', verbose_name='Valore Bonus'),
+            model_name="scenicarea",
+            name="bonus_value",
+            field=models.FloatField(
+                default=1.0,
+                help_text="Moltiplicatore per il punteggio panoramico",
+                verbose_name="Valore Bonus",
+            ),
         ),
         migrations.AlterField(
-            model_name='scenicarea',
-            name='name',
-            field=models.CharField(help_text="Nome descrittivo dell'area scenica", max_length=255, verbose_name="Nome dell'Area"),
+            model_name="scenicarea",
+            name="name",
+            field=models.CharField(
+                help_text="Nome descrittivo dell'area scenica",
+                max_length=255,
+                verbose_name="Nome dell'Area",
+            ),
         ),
         migrations.AddIndex(
-            model_name='pointofinterest',
-            index=models.Index(fields=['category'], name='gis_data_po_categor_b5b079_idx'),
+            model_name="pointofinterest",
+            index=models.Index(
+                fields=["category"], name="gis_data_po_categor_b5b079_idx"
+            ),
         ),
         migrations.AddIndex(
-            model_name='pointofinterest',
-            index=models.Index(fields=['name'], name='gis_data_po_name_100cfa_idx'),
+            model_name="pointofinterest",
+            index=models.Index(fields=["name"], name="gis_data_po_name_100cfa_idx"),
         ),
         migrations.AddIndex(
-            model_name='roadsegment',
-            index=models.Index(fields=['highway'], name='gis_data_ro_highway_c3b17e_idx'),
+            model_name="roadsegment",
+            index=models.Index(
+                fields=["highway"], name="gis_data_ro_highway_c3b17e_idx"
+            ),
         ),
         migrations.AddIndex(
-            model_name='roadsegment',
-            index=models.Index(fields=['source', 'target'], name='gis_data_ro_source_364d18_idx'),
+            model_name="roadsegment",
+            index=models.Index(
+                fields=["source", "target"], name="gis_data_ro_source_364d18_idx"
+            ),
         ),
         migrations.AddIndex(
-            model_name='roadsegment',
-            index=models.Index(fields=['scenic_rating'], name='gis_data_ro_scenic__343b5f_idx'),
+            model_name="roadsegment",
+            index=models.Index(
+                fields=["scenic_rating"], name="gis_data_ro_scenic__343b5f_idx"
+            ),
         ),
     ]

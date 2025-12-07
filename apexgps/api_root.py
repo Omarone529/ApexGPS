@@ -1,20 +1,28 @@
 from rest_framework.response import Response
-from rest_framework.views import APIView
 from rest_framework.reverse import reverse
+from rest_framework.views import APIView
 
 
 class APIRootView(APIView):
-    """
-    Custom API root view that list all ViewSet
-    """
+    """Custom API root view that list all ViewSet."""
+
     def get(self, request, format=None):
-        return Response({
-            # all apps with their endpoints
-            'users': reverse('customuser-list', request=request, format=format),
-            'gis_data': {
-                'points-of-interest': reverse('pointofinterest-list', request=request, format=format),
-                'scenic-areas': reverse('scenicarea-list', request=request, format=format),
-            },
-            'authentication': reverse('rest_framework:login', request=request, format=format),
-            'admin': reverse('admin:index', request=request, format=format),
-        })
+        """This function is used to return all ViewSet."""
+        return Response(
+            {
+                # all apps with their endpoints
+                "users": reverse("customuser-list", request=request, format=format),
+                "gis_data": {
+                    "points-of-interest": reverse(
+                        "pointofinterest-list", request=request, format=format
+                    ),
+                    "scenic-areas": reverse(
+                        "scenicarea-list", request=request, format=format
+                    ),
+                },
+                "authentication": reverse(
+                    "rest_framework:login", request=request, format=format
+                ),
+                "admin": reverse("admin:index", request=request, format=format),
+            }
+        )
