@@ -1,4 +1,3 @@
-# routes/models.py
 from django.contrib.auth import get_user_model
 from django.contrib.gis.db import models as gis_models
 from django.db import models
