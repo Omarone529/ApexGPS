@@ -1,10 +1,26 @@
-from rest_framework import viewsets
+from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from .models import CustomUser
-from .permissions import IsAdminUser, IsOwnerOrReadOnly
+from .permissions import IsAdminUser
 from .serializers import CustomUserSerializer
+
+
+class IsAdminOrOwner(permissions.BasePermission):
+    """Custom permission to allow either admin users or the object owner."""
+
+    def has_permission(self, request, view):
+        """List/create: Admin only. Other actions: Any authenticated user."""
+        if view.action in ["list", "create"]:
+            return IsAdminUser().has_permission(request, view)
+        return request.user and request.user.is_authenticated
+
+    def has_object_permission(self, request, view, obj):
+        """Admin can access any object, users can only access their own."""
+        if IsAdminUser().has_permission(request, view):
+            return True
+        return obj == request.user
 
 
 class CustomUserViewSet(viewsets.ModelViewSet):
@@ -25,11 +41,10 @@ class CustomUserViewSet(viewsets.ModelViewSet):
         if self.action in ["list", "create"]:
             return [IsAdminUser()]
         elif self.action in ["retrieve", "update", "partial_update", "destroy"]:
-            return [IsAdminUser() | IsOwnerOrReadOnly()]
+            # Using the custom class
+            return [IsAdminOrOwner()]
         elif self.action == "me":
-            from rest_framework.permissions import IsAuthenticated
-
-            return [IsAuthenticated()]
+            return [permissions.IsAuthenticated()]
 
         return super().get_permissions()
 
