@@ -1,4 +1,3 @@
-"""DEM Data Preparation and Loading Script."""
 import subprocess
 from pathlib import Path
 

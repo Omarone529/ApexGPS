@@ -29,6 +29,7 @@ urlpatterns = [
     # apps
     path("api/users/", include("users.urls")),
     path("api/gis/", include("gis_data.urls")),
+    path("api/dem/", include("dem_data_loader.urls")),
     path("api/", include("routes.urls")),
     # auth
     path("api/auth/", include("rest_framework.urls")),

@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     # Local apps
     "users.apps.UsersConfig",
     "gis_data.apps.GisDataConfig",
+    "dem_data_loader.apps.DemDataLoaderConfig",
     "routes.apps.RoutesConfig",
 ]
 

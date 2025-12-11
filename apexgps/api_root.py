@@ -20,6 +20,12 @@ class APIRootView(APIView):
                         "scenicarea-list", request=request, format=format
                     ),
                 },
+                "dem_data": {
+                    "elevation-queries": reverse(
+                        "elevationquery-list", request=request, format=format
+                    ),
+                    "dem": reverse("dem-list", request=request, format=format),
+                },
                 "routes": reverse("route-list", request=request, format=format),
                 "authentication": reverse(
                     "rest_framework:login", request=request, format=format
