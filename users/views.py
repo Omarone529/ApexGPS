@@ -4,7 +4,7 @@ from rest_framework.response import Response
 
 from .models import CustomUser
 from .permissions import IsAdminUser, IsOwnerOrReadOnly
-from .serializer import CustomUserSerializer
+from .serializers import CustomUserSerializer
 
 
 class CustomUserViewSet(viewsets.ModelViewSet):
