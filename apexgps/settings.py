@@ -42,9 +42,11 @@ INSTALLED_APPS = [
     # Third part apps
     "rest_framework",
     "django.contrib.gis",
+    "django_filters",
     # Local apps
     "users.apps.UsersConfig",
     "gis_data.apps.GisDataConfig",
+    "routes.apps.RoutesConfig",
 ]
 
 MIDDLEWARE = [

@@ -7,3 +7,4 @@ django-cors-headers==4.3.1
 python-decouple==3.8
 django-debug-toolbar==4.2.0
 django-extensions==3.2.3
+djangorestframework-gis==3.16.1
