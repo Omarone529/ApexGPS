@@ -53,21 +53,21 @@ class RouteViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     @action(detail=False, methods=["get"])
-    def public(self):
+    def public(self, request):
         """Retrieve only public routes."""
         routes = Route.objects.filter(visibility="public")
         serializer = self.get_serializer(routes, many=True)
         return Response(serializer.data)
 
     @action(detail=False, methods=["get"], permission_classes=[permissions.AllowAny])
-    def geojson(self):
+    def geojson(self, request):
         """Retrieve routes in GeoJSON format for map visualization."""
         queryset = self.filter_queryset(self.get_queryset())
         serializer = RouteGeoSerializer(queryset, many=True)
         return Response(serializer.data)
 
     @action(detail=True, methods=["post"])
-    def toggle_visibility(self, request):
+    def toggle_visibility(self, request, pk=None):
         """Toggle route visibility between private and public."""
         route = self.get_object()
 

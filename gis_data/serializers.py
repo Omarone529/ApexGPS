@@ -34,24 +34,21 @@ class PointOfInterestSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         """Custom validation to ensure location or lat/lon are provided."""
-        # Check if location is provided directly
+        if self.partial:
+            return data
         if "location" in data:
             return data
-        # Check if latitude and longitude are both provided
         latitude = data.get("latitude")
         longitude = data.get("longitude")
 
         if latitude is not None and longitude is not None:
             return data
-
-        # Check if only one of lat/lon is provided
         if (latitude is not None and longitude is None) or (
             latitude is None and longitude is not None
         ):
             raise serializers.ValidationError(
                 "Both latitude and longitude must be provided together."
             )
-        # Neither location nor lat/lon provided
         raise serializers.ValidationError(
             "Either 'location' or both 'latitude' and 'longitude' are required."
         )
