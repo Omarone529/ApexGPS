@@ -53,7 +53,7 @@ class ElevationQuery(models.Model):
                     cursor.execute(
                         """
                         SELECT ST_Value(rast, 1, ST_SetSRID(ST_Point(%s, %s), 4326))
-                        FROM dem_data_loader_demtile  # Changed from 'dem'
+                        FROM dem_data_loader_demtile
                         WHERE ST_Intersects(rast, ST_SetSRID(ST_Point(%s, %s), 4326))
                         LIMIT 1;
                     """,
