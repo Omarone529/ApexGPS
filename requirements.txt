@@ -7,4 +7,13 @@ django-cors-headers==4.3.1
 python-decouple==3.8
 django-debug-toolbar==4.2.0
 django-extensions==3.2.3
-djangorestframework-gis==3.16.1
+numpy==1.26.4
+pandas==2.1.4
+shapely==2.0.2
+fiona==1.9.5
+pyproj==3.6.1
+rasterio==1.3.9
+boto3==1.34.125
+geopandas==0.14.3
+requests==2.31.0
+elevation==1.1.3
