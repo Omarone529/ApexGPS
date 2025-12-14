@@ -88,3 +88,89 @@ class Route(models.Model):
             return True
 
         return self.visibility in ["public", "link"]
+
+    def get_stops_count(self):
+        """Get the number of stops in this route (excluding start/end)."""
+        return self.stops.count()
+
+    def get_all_points_in_order(self):
+        """
+        Get all points in the route in correct order:
+        [start, stop1, stop2, ..., stopN, end].
+        """
+        points = [self.start_location]
+
+        # Get all stops in order
+        stops = self.stops.order_by("order")
+        for stop in stops:
+            points.append(stop.location)
+
+        points.append(self.end_location)
+        return points
+
+
+class Stop(models.Model):
+    """
+    Model representing a user-added stop along a scenic route.
+    Stops are intermediate points that the route must pass through.
+    The route is recalculated to be scenic between each consecutive point.
+    """
+
+    route = models.ForeignKey(
+        Route, on_delete=models.CASCADE, related_name="stops", verbose_name="Percorso"
+    )
+    order = models.PositiveIntegerField(
+        verbose_name="Ordine",
+        help_text="Posizione nella sequenza (1 = prima tappa dopo la partenza)",
+    )
+    location = gis_models.PointField(verbose_name="Posizione")
+    name = models.CharField(
+        max_length=255,
+        blank=True,
+        verbose_name="Nome tappa (opzionale)",
+        help_text="Nome descrittivo della tappa",
+    )
+
+    # Timestamp
+    added_at = models.DateTimeField(auto_now_add=True, verbose_name="Data aggiunta")
+
+    class Meta:
+        """Metadata configuration for the Stop model."""
+
+        verbose_name = "Tappa"
+        verbose_name_plural = "Tappe"
+        ordering = ["route", "order"]
+        unique_together = ["route", "order"]
+        indexes = [
+            models.Index(fields=["route", "order"]),
+        ]
+
+    def __str__(self):
+        """Human-readable string representation of the stop."""
+        if self.name:
+            return f"Tappa {self.order}: {self.name}"
+        return f"Tappa {self.order}"
+
+    def save(self, *args, **kwargs):
+        """Ensure order is unique and sequential within the route."""
+        # If this is a new stop and no order specified, put it at the end
+        if not self.pk and not self.order:
+            last_stop = Stop.objects.filter(route=self.route).order_by("-order").first()
+            self.order = (last_stop.order + 1) if last_stop else 1
+
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        """When deleting a stop, reorder remaining stops."""
+        route_id = self.route_id
+        order_to_delete = self.order
+
+        super().delete(*args, **kwargs)
+
+        # Reorder remaining stops in the same route
+        stops_to_reorder = Stop.objects.filter(
+            route_id=route_id, order__gt=order_to_delete
+        )
+        for stop in stops_to_reorder:
+            stop.order -= 1
+            stop.save()
