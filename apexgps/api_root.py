@@ -26,7 +26,10 @@ class APIRootView(APIView):
                     ),
                     "dem": reverse("dem-list", request=request, format=format),
                 },
-                "routes": reverse("route-list", request=request, format=format),
+                "routes": {
+                    "routes": reverse("route-list", request=request, format=format),
+                    "stops": reverse("stop-list", request=request, format=format),
+                },
                 "authentication": reverse(
                     "rest_framework:login", request=request, format=format
                 ),

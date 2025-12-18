@@ -7,14 +7,28 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
     Unauthenticated users can only read public objects.
     Authenticated users can read all objects (public, private if owner)
     but can only modify/delete their own objects.
+    Supports both Route and Stop objects.
     """
 
     def has_object_permission(self, request, view, obj):
         """Check object-level permissions."""
+        # Read permissions are allowed for any request
         if request.method in permissions.SAFE_METHODS:
-            return obj.can_view(request.user)
-        # Write permissions only for the owner
-        return obj.owner == request.user
+            if hasattr(obj, "can_view"):
+                return obj.can_view(request.user)
+            elif hasattr(obj, "route"):
+                return obj.route.can_view(request.user)
+            elif hasattr(obj, "owner"):
+                if hasattr(obj, "can_view"):
+                    return obj.can_view(request.user)
+                return obj.owner == request.user or request.user.is_staff
+            return True
+
+        if hasattr(obj, "owner"):
+            return obj.owner == request.user or request.user.is_staff
+        elif hasattr(obj, "route"):
+            return obj.route.owner == request.user or request.user.is_staff
+        return request.user and request.user.is_staff
 
 
 class IsAdminOrReadOnly(permissions.BasePermission):
