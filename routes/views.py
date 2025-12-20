@@ -36,10 +36,15 @@ class RouteViewSet(viewsets.ModelViewSet):
         if user.is_staff:
             return Route.objects.all()
         if user.is_authenticated:
+            # For authenticated users:
+            # public routes + link-shared routes + their own routes
             return Route.objects.filter(
-                models.Q(owner=user) | models.Q(visibility="public")
+                models.Q(owner=user)
+                | models.Q(visibility="public")
+                | models.Q(visibility="link")
             )
-        # Anonymous users can only see public routes
+
+        # Anonymous users can only see public routes, not link-shared routes)
         return Route.objects.filter(visibility="public")
 
     def perform_create(self, serializer):
