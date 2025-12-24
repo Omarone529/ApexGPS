@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgis/postgis:14-3.4
+    build: ./db
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./dem_data:/dem_data

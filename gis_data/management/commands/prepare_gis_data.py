@@ -161,7 +161,7 @@ class Command(BaseCommand):
 
         # Horizontal roads
         for lat in [46.0, 46.1, 46.2]:
-            geometry = LineString((9.0, lat, 9.5, lat), srid=4326)
+            geometry = LineString([(9.0, lat), (9.5, lat)], srid=4326)
             segments.append(
                 RoadSegment(
                     name=f"Road at {lat}°N",
@@ -174,7 +174,7 @@ class Command(BaseCommand):
 
         # Vertical roads
         for lon in [9.0, 9.25, 9.5]:
-            geometry = LineString((lon, 46.0, lon, 46.2), srid=4326)
+            geometry = LineString([(lon, 46.0), (lon, 46.2)], srid=4326)
             segments.append(
                 RoadSegment(
                     name=f"Road at {lon}°E",
