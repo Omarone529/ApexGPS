@@ -25,7 +25,12 @@ class Command(BaseCommand):
     help = "Prepares real GIS database for scenic routing operations"
 
     def add_arguments(self, parser):
-        """Define command-line arguments for data preparation."""
+        """
+        Define command-line arguments for data preparation.
+
+        Args:
+            parser: argparse.ArgumentParser instance for argument definition
+        """
         parser.add_argument(
             "--area",
             type=str,
