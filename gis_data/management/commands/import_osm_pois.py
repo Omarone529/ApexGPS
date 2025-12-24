@@ -1,9 +1,3 @@
-"""
-Import Points of Interest from OpenStreetMap.
-Fetches scenic and motorcycle-relevant POIs within a geographic area.
-"""
-
-import logging
 import os
 import time
 
@@ -15,16 +9,17 @@ from django.db.utils import IntegrityError
 
 from gis_data.models import PointOfInterest
 
-logger = logging.getLogger(__name__)
-
 
 class OSMImporter:
-    """Handles OpenStreetMap data import for Points of Interest."""
+    """
+    OpenStreetMap data importer for Points of Interest.
 
-    # API endpoint
+    Handles Overpass API queries and data extraction for various
+    POI categories relevant to scenic motorcycle routing.
+    """
+
     OSM_URL = os.environ.get("OSM_URL")
 
-    # Query templates for different POI categories
     QUERIES = {
         "panoramic": """
             [out:json][timeout:300];
@@ -112,27 +107,41 @@ class OSMImporter:
     }
 
     @classmethod
-    def fetch_pois(cls, area: str = "Italy", category: str = None) -> list[dict]:
-        """Fetch POIs from OpenStreetMap for a specific area and category."""
+    def _execute_overpass_query(cls, query):
+        """Execute query against Overpass API."""
+        try:
+            response = requests.post(cls.OSM_URL, data={"data": query}, timeout=300)
+            response.raise_for_status()
+            return response.json().get("elements", [])
+        except requests.RequestException:
+            return []
+
+    @classmethod
+    def fetch_pois(cls, area: str = "Italy", category: str = None):
+        """
+        Fetch POIs from OpenStreetMap for a specific area and category.
+
+        Args:
+            area: Geographic area name (e.g., "Italy", "Lombardia")
+            category: POI category to fetch from available QUERIES
+
+        Returns:
+            list[dict]: Raw OSM elements for the specified category
+
+        Raises:
+            ValueError: If the specified category is not supported
+        """
         if category not in cls.QUERIES:
             raise ValueError(
                 f"Unknown category: {category}. Available: {list(cls.QUERIES.keys())}"
             )
 
         query = cls.QUERIES[category].format(area=area)
-
-        try:
-            response = requests.post(cls.OSM_URL, data={"data": query}, timeout=300)
-            response.raise_for_status()
-            return response.json().get("elements", [])
-        except requests.RequestException as e:
-            logger.error(f"Failed to fetch OSM data for {category}: {e}")
-            return []
+        return cls._execute_overpass_query(query)
 
     @classmethod
-    def extract_poi_info(cls, element: dict, category: str) -> dict | None:
-        """Extract relevant information from OSM element."""
-        # Get coordinates
+    def _extract_coordinates(cls, element):
+        """Extract coordinates from OSM element."""
         if element.get("type") == "node":
             lat = element.get("lat")
             lon = element.get("lon")
@@ -140,18 +149,18 @@ class OSMImporter:
             lat = element.get("center", {}).get("lat")
             lon = element.get("center", {}).get("lon")
         else:
-            return None
+            return None, None
 
-        if not lat or not lon:
-            return None
+        return lat, lon
 
-        # Get name
-        tags = element.get("tags", {})
-        name = (
-            tags.get("name") or tags.get("description") or f"{category}_{element['id']}"
-        )
+    @classmethod
+    def _extract_name(cls, tags, category, element_id):
+        """Extract name from OSM tags."""
+        return tags.get("name") or tags.get("description") or f"{category}_{element_id}"
 
-        # Get description
+    @classmethod
+    def _extract_description(cls, tags):
+        """Extract description from OSM tags."""
         description_parts = []
         if tags.get("description"):
             description_parts.append(tags["description"])
@@ -160,10 +169,31 @@ class OSMImporter:
         if tags.get("wikidata"):
             description_parts.append(f"Wikidata: {tags['wikidata']}")
 
-        description = " | ".join(description_parts) if description_parts else None
+        return " | ".join(description_parts) if description_parts else None
+
+    @classmethod
+    def extract_poi_info(cls, element: dict, category: str):
+        """
+        Extract relevant information from OSM element for database storage.
+
+        Args:
+            element: Raw OSM API element (node, way, or relation)
+            category: POI category for classification
+
+        Returns:
+            dict: Structured POI information including name, coordinates,
+                  description, and OSM metadata, or None if invalid
+        """
+        lat, lon = cls._extract_coordinates(element)
+        if not lat or not lon:
+            return None
+
+        tags = element.get("tags", {})
+        name = cls._extract_name(tags, category, element["id"])
+        description = cls._extract_description(tags)
 
         return {
-            "name": name[:255],  # Truncate to fit CharField
+            "name": name[:255],
             "category": category,
             "location": Point(float(lon), float(lat), srid=4326),
             "description": description,
@@ -171,19 +201,94 @@ class OSMImporter:
             "osm_tags": tags,
         }
 
+    @classmethod
+    def _find_existing_poi(cls, location):
+        """Find existing POI by location proximity."""
+        return PointOfInterest.objects.filter(
+            location__dwithin=(location, 0.001)
+        ).first()
+
+    @classmethod
+    def _update_existing_poi(cls, existing, poi_info):
+        """Update existing POI with new information."""
+        existing.name = poi_info["name"]
+        existing.category = poi_info["category"]
+        existing.description = poi_info["description"]
+        existing.save()
+
+    @classmethod
+    def _create_new_poi(cls, poi_info):
+        """Create new POI record."""
+        PointOfInterest.objects.create(**poi_info)
+
+    @classmethod
+    def _process_osm_element(cls, element, category):
+        """Process single OSM element into POI."""
+        poi_info = cls.extract_poi_info(element, category)
+        if not poi_info:
+            return False, True  # Failed, skipped
+
+        try:
+            existing = cls._find_existing_poi(poi_info["location"])
+            if existing:
+                cls._update_existing_poi(existing, poi_info)
+            else:
+                cls._create_new_poi(poi_info)
+            return True, False  # Success, not skipped
+        except IntegrityError:
+            return False, True  # Failed, skipped
+
 
 class Command(BaseCommand):
     """
-    Import Points of Interest from OpenStreetMap.
+    Management command for importing Points of Interest from OpenStreetMap.
 
-    This class fetches motorcycle-relevant POIs from OSM and stores them
-    in the db for scenic routing calculations.
+    This command fetches motorcycle-relevant POIs from OSM within specified
+    geographic areas and categories, storing them in the database for use
+    in scenic route calculation and POI density scoring.
     """
 
     help = "Import Points of Interest from OpenStreetMap"
 
+    def _parse_categories_argument(self, categories_arg):
+        """Parse categories command-line argument."""
+        if categories_arg == "all":
+            return list(OSMImporter.QUERIES.keys())
+        return [c.strip() for c in categories_arg.split(",")]
+
+    def _clear_existing_pois(self):
+        """Clear all existing POIs if requested."""
+        PointOfInterest.objects.all().delete()
+
+    def _process_category(self, importer, area, category, limit):
+        """Process single category of POIs."""
+        if category not in OSMImporter.QUERIES:
+            return 0, 0
+
+        elements = importer.fetch_pois(area=area, category=category)
+        if not elements:
+            return 0, 0
+
+        imported_count = 0
+        skipped_count = 0
+
+        for element in elements[: limit or None]:
+            success, skipped = OSMImporter._process_osm_element(element, category)
+            if success:
+                imported_count += 1
+            elif skipped:
+                skipped_count += 1
+
+        time.sleep(1)  # Rate limiting
+        return imported_count, skipped_count
+
     def add_arguments(self, parser):
-        """Define command-line arguments."""
+        """
+        Define command-line arguments for POI import.
+
+        Args:
+            parser: argparse.ArgumentParser instance for argument definition
+        """
         parser.add_argument(
             "--area",
             type=str,
@@ -209,93 +314,36 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        """Execute OSM POI import."""
+        """
+        Execute the OSM POI import process.
+
+        Orchestrates the complete import workflow:
+        1. Determine categories to import
+        2. Clear existing data if requested
+        3. Fetch and process POIs from OSM for each category
+        4. Store imported POIs in the database
+        5. Trigger scenic score recalculation
+
+        Args:
+            *args: Additional positional arguments
+            **options: Command-line options
+        """
         area = options["area"]
+        categories = self._parse_categories_argument(options["categories"])
 
-        # Determine categories to import
-        if options["categories"] == "all":
-            categories = list(OSMImporter.QUERIES.keys())
-        else:
-            categories = [c.strip() for c in options["categories"].split(",")]
-
-        # Clear existing data if requested
         if options["clear"]:
-            deleted_count, _ = PointOfInterest.objects.all().delete()
-            self.stdout.write(f"Cleared {deleted_count} existing POIs")
+            self._clear_existing_pois()
 
         importer = OSMImporter()
         total_imported = 0
 
         with transaction.atomic():
             for category in categories:
-                if category not in OSMImporter.QUERIES:
-                    self.stdout.write(
-                        self.style.WARNING(f"Unknown category: {category}. Skipping.")
-                    )
-                    continue
-
-                self.stdout.write(f"Fetching {category} POIs in {area}...")
-
-                # Fetch POIs from OSM
-                elements = importer.fetch_pois(area=area, category=category)
-
-                if not elements:
-                    self.stdout.write(f"  No {category} POIs found")
-                    continue
-
-                # Process and save POIs
-                imported_count = 0
-                skipped_count = 0
-
-                for element in elements[: options["limit"] or None]:
-                    poi_info = importer.extract_poi_info(element, category)
-
-                    if not poi_info:
-                        skipped_count += 1
-                        continue
-
-                    try:
-                        # Check if POI already exists (by coordinates or OSM ID)
-                        existing = PointOfInterest.objects.filter(
-                            location__dwithin=(poi_info["location"], 0.001)  # ~100m
-                        ).first()
-
-                        if existing:
-                            # Update existing POI
-                            existing.name = poi_info["name"]
-                            existing.category = poi_info["category"]
-                            existing.description = poi_info["description"]
-                            existing.save()
-                        else:
-                            # Create new POI
-                            PointOfInterest.objects.create(**poi_info)
-
-                        imported_count += 1
-
-                    except IntegrityError as e:
-                        logger.warning(f"Failed to save POI {poi_info['name']}: {e}")
-                        skipped_count += 1
-
-                # Rate limiting to be nice to OSM API
-                time.sleep(1)
-
-                self.stdout.write(
-                    self.style.SUCCESS(
-                        f"  Imported {imported_count} {category} POIs "
-                        f"(skipped {skipped_count})"
-                    )
+                imported_count, _ = self._process_category(
+                    importer, area, category, options["limit"]
                 )
                 total_imported += imported_count
 
-        self.stdout.write(
-            self.style.SUCCESS(
-                f"\nTotal imported: {total_imported}"
-                f" POIs from {len(categories)} categories"
-            )
-        )
-
-        # Run scenic score calculation to update POI densities
-        self.stdout.write("\nUpdating scenic scores with new POIs...")
         from django.core.management import call_command
 
         call_command("prepare_gis_data", "--area", area)
