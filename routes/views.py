@@ -1,3 +1,5 @@
+import time
+
 from django.contrib.gis.geos import Point
 from django.db import models
 from django_filters.rest_framework import DjangoFilterBackend
@@ -7,7 +9,21 @@ from rest_framework.response import Response
 
 from .models import Route, Stop
 from .permissions import IsOwnerOrReadOnly
-from .serializers import RouteGeoSerializer, RouteSerializer, StopSerializer
+from .serializers import (
+    RouteCalculationInputSerializer,
+    RouteGeoSerializer,
+    RouteSerializer,
+    StopSerializer,
+)
+
+try:
+    from routes.services.routing.fast_routing import FastRoutingService
+    from routes.services.routing.route_validator import RouteValidator
+except ImportError:
+    FastRoutingService = None
+    RouteValidator = None
+
+__all__ = ["RouteViewSet", "StopViewSet"]
 
 
 class RouteViewSet(viewsets.ModelViewSet):
@@ -91,6 +107,129 @@ class RouteViewSet(viewsets.ModelViewSet):
         route.save()
         serializer = self.get_serializer(route)
         return Response(serializer.data)
+
+    @action(
+        detail=False,
+        methods=["post"],
+        permission_classes=[permissions.IsAuthenticatedOrReadOnly],
+        url_path="calculate-fastest",
+    )
+    def calculate_fastest_route(self, request):
+        """
+        WARNING: This route is NOT shown to users, only used for benchmarking.
+
+        Calculate FASTEST route between two points.
+        This endpoint calculates the fastest route to establish a time baseline.
+        The result is used internally for time constraints on scenic routes.
+        """
+        start_time = time.time()
+
+        # Check if routing services are available
+        if not FastRoutingService or not RouteValidator:
+            return Response(
+                {
+                    "error": "Routing services not available. "
+                    "Please ensure database is prepared."
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        # Validate input (simplified version without preference)
+        simplified_data = request.data.copy()
+        # Remove fields not needed for fastest route
+        simplified_data.pop("preference", None)
+        simplified_data.pop("max_time_increase_pct", None)
+        simplified_data.pop("include_fastest", None)
+
+        input_serializer = RouteCalculationInputSerializer(data=simplified_data)
+        if not input_serializer.is_valid():
+            return Response(input_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        validated_data = input_serializer.validated_data
+
+        # Extract parameters
+        start_lat = validated_data["start_lat"]
+        start_lon = validated_data["start_lon"]
+        end_lat = validated_data["end_lat"]
+        end_lon = validated_data["end_lon"]
+        vertex_threshold = validated_data.get("vertex_threshold", 0.01)
+
+        # Initialize services
+        fast_service = FastRoutingService()
+        validator = RouteValidator()
+
+        # Validate route request
+        validation_result = validator.full_route_validation(
+            start_lat=start_lat,
+            start_lon=start_lon,
+            end_lat=end_lat,
+            end_lon=end_lon,
+            max_distance_km=1000.0,
+        )
+
+        if not validation_result["is_valid"]:
+            return Response(
+                {
+                    "error": "Route validation failed",
+                    "validation": validation_result,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            fastest_route = fast_service.calculate_fastest_route(
+                start_lat=start_lat,
+                start_lon=start_lon,
+                end_lat=end_lat,
+                end_lon=end_lon,
+                vertex_threshold=vertex_threshold,
+            )
+
+            if not fastest_route:
+                return Response(
+                    {
+                        "error": "No route found between points",
+                        "validation": validation_result,
+                    },
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            # Prepare response
+            response_data = {
+                "route_type": "fastest_benchmark",
+                "purpose": "internal_benchmark_only",
+                "warning": "This route is for benchmarking only, not shown to users",
+                # Route metrics
+                "total_distance_km": fastest_route["total_distance_km"],
+                "total_time_minutes": fastest_route["total_time_minutes"],
+                "total_distance_m": fastest_route["total_distance_m"],
+                "total_time_seconds": fastest_route["total_time_seconds"],
+                "segment_count": fastest_route["segment_count"],
+                # For validation
+                "validation": {
+                    "is_valid": validation_result["is_valid"],
+                    "warnings": validation_result["warnings"],
+                    "start_vertex": validation_result.get("start_vertex"),
+                    "end_vertex": validation_result.get("end_vertex"),
+                },
+                # Processing info
+                "processing_time_ms": (time.time() - start_time) * 1000,
+                "database_status": "real_data",
+                # Include minimal info for debugging
+                "start_coordinates": {"lat": start_lat, "lon": start_lon},
+                "end_coordinates": {"lat": end_lat, "lon": end_lon},
+            }
+
+            return Response(response_data, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response(
+                {
+                    "error": f"Error calculating fastest route: {str(e)}",
+                    "validation": validation_result,
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     # stop managment actions
     @action(detail=True, methods=["post"], permission_classes=[IsOwnerOrReadOnly])
