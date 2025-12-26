@@ -9,16 +9,13 @@ from django.db.utils import IntegrityError
 
 from gis_data.models import PointOfInterest
 
+__all__ = ["OSMImporter", "Command"]
+
 
 class OSMImporter:
-    """
-    OpenStreetMap data importer for Points of Interest.
+    """OpenStreetMap data importer for Points of Interest."""
 
-    Handles Overpass API queries and data extraction for various
-    POI categories relevant to scenic motorcycle routing.
-    """
-
-    OSM_URL = os.environ.get("OSM_URL")
+    OSM_URL = os.environ.get("OSM_URL", "https://overpass-api.de/api/interpreter")
 
     QUERIES = {
         "panoramic": """
@@ -113,24 +110,12 @@ class OSMImporter:
             response = requests.post(cls.OSM_URL, data={"data": query}, timeout=300)
             response.raise_for_status()
             return response.json().get("elements", [])
-        except requests.RequestException:
+        except (requests.RequestException, ValueError):
             return []
 
     @classmethod
     def fetch_pois(cls, area: str = "Italy", category: str = None):
-        """
-        Fetch POIs from OpenStreetMap for a specific area and category.
-
-        Args:
-            area: Geographic area name (e.g., "Italy", "Lombardia")
-            category: POI category to fetch from available QUERIES
-
-        Returns:
-            list[dict]: Raw OSM elements for the specified category
-
-        Raises:
-            ValueError: If the specified category is not supported
-        """
+        """Fetch POIs from OpenStreetMap for a specific area and category."""
         if category not in cls.QUERIES:
             raise ValueError(
                 f"Unknown category: {category}. Available: {list(cls.QUERIES.keys())}"
@@ -173,17 +158,7 @@ class OSMImporter:
 
     @classmethod
     def extract_poi_info(cls, element: dict, category: str):
-        """
-        Extract relevant information from OSM element for database storage.
-
-        Args:
-            element: Raw OSM API element (node, way, or relation)
-            category: POI category for classification
-
-        Returns:
-            dict: Structured POI information including name, coordinates,
-                  description, and OSM metadata, or None if invalid
-        """
+        """Extract relevant information from OSM element for database storage."""
         lat, lon = cls._extract_coordinates(element)
         if not lat or not lon:
             return None
@@ -226,7 +201,7 @@ class OSMImporter:
         """Process single OSM element into POI."""
         poi_info = cls.extract_poi_info(element, category)
         if not poi_info:
-            return False, True  # Failed, skipped
+            return False, True
 
         try:
             existing = cls._find_existing_poi(poi_info["location"])
@@ -234,19 +209,13 @@ class OSMImporter:
                 cls._update_existing_poi(existing, poi_info)
             else:
                 cls._create_new_poi(poi_info)
-            return True, False  # Success, not skipped
+            return True, False
         except IntegrityError:
-            return False, True  # Failed, skipped
+            return False, True
 
 
 class Command(BaseCommand):
-    """
-    Management command for importing Points of Interest from OpenStreetMap.
-
-    This command fetches motorcycle-relevant POIs from OSM within specified
-    geographic areas and categories, storing them in the database for use
-    in scenic route calculation and POI density scoring.
-    """
+    """Management command for importing Points of Interest from OpenStreetMap."""
 
     help = "Import Points of Interest from OpenStreetMap"
 
@@ -279,16 +248,11 @@ class Command(BaseCommand):
             elif skipped:
                 skipped_count += 1
 
-        time.sleep(1)  # Rate limiting
+        time.sleep(1)
         return imported_count, skipped_count
 
     def add_arguments(self, parser):
-        """
-        Define command-line arguments for POI import.
-
-        Args:
-            parser: argparse.ArgumentParser instance for argument definition
-        """
+        """Define command-line arguments for POI import."""
         parser.add_argument(
             "--area",
             type=str,
@@ -314,20 +278,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        """
-        Execute the OSM POI import process.
-
-        Orchestrates the complete import workflow:
-        1. Determine categories to import
-        2. Clear existing data if requested
-        3. Fetch and process POIs from OSM for each category
-        4. Store imported POIs in the database
-        5. Trigger scenic score recalculation
-
-        Args:
-            *args: Additional positional arguments
-            **options: Command-line options
-        """
+        """Execute the OSM POI import process."""
         area = options["area"]
         categories = self._parse_categories_argument(options["categories"])
 
