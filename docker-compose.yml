@@ -30,6 +30,7 @@ services:
     command: >
       sh -c "sleep 3 &&
              python manage.py migrate &&
+             python manage.py setup_database &&
              python manage.py runserver 0.0.0.0:8000"
     environment:
       DB_HOST: ${DB_HOST}
@@ -39,6 +40,8 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       DJANGO_SETTINGS_MODULE: apexgps.settings
       OSM_URL: ${OSM_URL}
+        - LOCAL_PATH1=${LOCAL_PATH1}
+        - LOCAL_PATH2=${LOCAL_PATH2}
       INIT_AREA: ${INIT_AREA}
 
 volumes:
