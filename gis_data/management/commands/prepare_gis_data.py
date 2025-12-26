@@ -102,7 +102,21 @@ class Command(BaseCommand):
         return road_count == 0
 
     def _calculate_routing_costs(self):
-        """Calculate routing costs for different optimization strategies."""
+        """
+        Calculate routing costs for different optimization strategies.
+
+        Uses the correct formula: C = (α × length_m) - (β × scenic_score)
+        where scenic_score = scenic_rating × 100
+
+        Coefficients for different preferences:
+        - Fast: α=1.0, β=0.1 (mostly distance-based)
+        - Balanced: α=0.6, β=0.4 (balanced)
+        - Most Winding: α=0.3, β=0.7 (heavily scenic-weighted)
+
+        Note: cost_scenic is for "most_winding" preference
+        cost_balanced is for "balanced" preference
+        cost_time is for "fast" preference
+        """
         with connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -112,10 +126,24 @@ class Command(BaseCommand):
                     cost_time = CASE
                         WHEN maxspeed > 0 THEN length_m / (maxspeed / 3.6)
                         ELSE length_m / (50 / 3.6)
-                    END,
-                    cost_scenic = length_m * (10 - scenic_rating) / 10
+                    END
                 WHERE length_m > 0
-            """
+                """
+            )
+
+            cursor.execute(
+                """
+                UPDATE gis_data_roadsegment
+                SET cost_scenic = (0.3 * length_m) - (0.7 * (scenic_rating * 100))
+                WHERE length_m > 0 AND scenic_rating IS NOT NULL
+                """
+            )
+            cursor.execute(
+                """
+                UPDATE gis_data_roadsegment
+                SET cost_balanced = (0.6 * length_m) - (0.4 * (scenic_rating * 100))
+                WHERE length_m > 0 AND scenic_rating IS NOT NULL
+                """
             )
 
     def _calculate_all_metrics(self, metrics_calculator):
