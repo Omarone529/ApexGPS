@@ -6,6 +6,7 @@
 ![GIS-PostGIS/pgRouting](https://img.shields.io/badge/GIS-PostGIS%2FpgRouting-4169E1?logo=postgresql&logoColor=white)
 ![Architecture-REST API](https://img.shields.io/badge/Architecture-REST%20API-7B8997)
 
+![Logo](./assets/logo/ApexGPS_logo.png)
 
 ## 1. Panoramica del Progetto
 
