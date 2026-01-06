@@ -29,6 +29,13 @@ class APIRootView(APIView):
                 "routes": {
                     "routes": reverse("route-list", request=request, format=format),
                     "stops": reverse("stop-list", request=request, format=format),
+                    "calculate-benchmark": reverse(
+                        "route-calculate-fastest", request=request, format=format
+                    ),
+                    "my-routes": reverse(
+                        "route-my-routes", request=request, format=format
+                    ),
+                    "public": reverse("route-public", request=request, format=format),
                 },
                 "authentication": reverse(
                     "rest_framework:login", request=request, format=format

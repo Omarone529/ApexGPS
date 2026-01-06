@@ -4,8 +4,19 @@ from rest_framework import serializers
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
 
 from .models import Route, Stop
+from .service.routing.route_validator import RouteValidator
 
 User = get_user_model()
+
+__all__ = [
+    "StopSerializer",
+    "RouteSerializer",
+    "RouteValidator",
+    "RouteGeoSerializer",
+    "RouteCalculationInputSerializer",
+    "RouteCalculationResultSerializer",
+    "RouteCalculationResponseSerializer",
+]
 
 
 class StopSerializer(serializers.ModelSerializer):
@@ -164,3 +175,185 @@ class RouteGeoSerializer(GeoFeatureModelSerializer):
         model = Route
         geo_field = "start_location"
         fields = ["id", "name", "owner", "visibility", "distance_km"]
+
+
+class RouteCalculationInputSerializer(serializers.Serializer):
+    """
+    Serializer for route calculation input.
+    Separate from RouteSerializer as this is for calculation, not CRUD.
+    """
+
+    # Start coordinates
+    start_lat = serializers.FloatField(
+        required=True,
+        min_value=-90,
+        max_value=90,
+        help_text="Start latitude (-90 to 90)",
+    )
+    start_lon = serializers.FloatField(
+        required=True,
+        min_value=-180,
+        max_value=180,
+        help_text="Start longitude (-180 to 180)",
+    )
+
+    # End coordinates
+    end_lat = serializers.FloatField(
+        required=True, min_value=-90, max_value=90, help_text="End latitude (-90 to 90)"
+    )
+    end_lon = serializers.FloatField(
+        required=True,
+        min_value=-180,
+        max_value=180,
+        help_text="End longitude (-180 to 180)",
+    )
+
+    # Routing preference (for future use with scenic routes)
+    preference = serializers.ChoiceField(
+        required=False,
+        choices=[
+            ("fast", "Veloce"),
+            ("balanced", "Equilibrata"),
+            ("most_winding", "Sinuosa Massima"),
+        ],
+        default="balanced",
+        help_text="Routing preference (for scenic routes)",
+    )
+
+    # Time constraint (40 minutes = 0.67 hours, we'll use percentage)
+    max_time_increase_pct = serializers.FloatField(
+        required=False,
+        min_value=0.1,
+        max_value=1.0,
+        default=0.5,
+        help_text="Maximum time increase as percentage"
+        " (0.5 = 50% = 40min on 80min base)",
+    )
+
+    # Advanced parameters
+    vertex_threshold = serializers.FloatField(
+        required=False,
+        min_value=0.0001,
+        max_value=0.1,
+        default=0.01,
+        help_text="Vertex snapping threshold in degrees (~1km)",
+    )
+
+    include_fastest = serializers.BooleanField(
+        required=False,
+        default=False,
+        help_text="Include fastest route in response (for benchmarking)",
+    )
+
+    def validate(self, data):
+        """Custom validation for coordinate pairs."""
+        # Validate coordinates are within Italy bounds
+        start_lat, start_lon = data.get("start_lat"), data.get("start_lon")
+        end_lat, end_lon = data.get("end_lat"), data.get("end_lon")
+
+        # Italy bounds check
+        ITALY_BOUNDS = {
+            "min_lat": 35.0,
+            "max_lat": 47.0,
+            "min_lon": 6.0,
+            "max_lon": 19.0,
+        }
+
+        for name, lat, lon in [
+            ("start", start_lat, start_lon),
+            ("end", end_lat, end_lon),
+        ]:
+            if not (ITALY_BOUNDS["min_lat"] <= lat <= ITALY_BOUNDS["max_lat"]):
+                raise serializers.ValidationError(
+                    {name: f"Latitude {lat} is outside Italy bounds (35° to 47°)"}
+                )
+            if not (ITALY_BOUNDS["min_lon"] <= lon <= ITALY_BOUNDS["max_lon"]):
+                raise serializers.ValidationError(
+                    {name: f"Longitude {lon} is outside Italy bounds (6° to 19°)"}
+                )
+
+        return data
+
+
+class RouteCalculationResultSerializer(serializers.Serializer):
+    """
+    Serializer for route calculation results.
+    Used only for API response, not for saving to database.
+    """
+
+    # Basic route info
+    preference = serializers.CharField(help_text="Routing preference used")
+    total_distance_km = serializers.FloatField(help_text="Total distance in km")
+    total_time_minutes = serializers.FloatField(help_text="Total time in minutes")
+
+    # For map display
+    polyline = serializers.CharField(
+        required=False, help_text="Encoded polyline for map"
+    )
+
+    # Time constraint info
+    time_constraint_respected = serializers.BooleanField(
+        required=False, help_text="Whether time constraint was respected"
+    )
+    time_exceeded_minutes = serializers.FloatField(
+        required=False, help_text="Minutes exceeded beyond constraint"
+    )
+
+    # Scenic metrics
+    total_scenic_score = serializers.FloatField(
+        required=False, help_text="Total scenic score along route"
+    )
+    avg_scenic_rating = serializers.FloatField(
+        required=False, help_text="Average scenic rating"
+    )
+
+    # For saving to database
+    can_save = serializers.BooleanField(
+        help_text="Whether this route can be saved to database"
+    )
+
+    def to_representation(self, instance):
+        """Format the response."""
+        data = super().to_representation(instance)
+
+        # Add human-readable fields
+        if "total_time_minutes" in data:
+            hours = int(data["total_time_minutes"] // 60)
+            minutes = int(data["total_time_minutes"] % 60)
+            data["total_time_formatted"] = f"{hours}h {minutes}min"
+
+        if "total_distance_km" in data:
+            data["total_distance_formatted"] = f"{data['total_distance_km']:.1f} km"
+
+        return data
+
+
+class RouteCalculationResponseSerializer(serializers.Serializer):
+    """
+    Complete response for route calculation.
+    Used for scenic routes (to be implemented in PR #3).
+    """
+
+    # Fastest route (benchmark - hidden from user but needed for constraint)
+    fastest_route = RouteCalculationResultSerializer(
+        required=False, help_text="Fastest route (benchmark, hidden from user)"
+    )
+
+    # Calculated routes
+    calculated_routes = serializers.DictField(
+        child=RouteCalculationResultSerializer(),
+        help_text="Calculated scenic routes by preference",
+    )
+
+    # Best route by preference
+    best_route = RouteCalculationResultSerializer(
+        help_text="Best scenic route for the requested preference"
+    )
+
+    # Validation info
+    validation = serializers.DictField(help_text="Validation results and warnings")
+
+    # Processing info
+    processing_time_ms = serializers.FloatField(
+        help_text="Processing time in milliseconds"
+    )
