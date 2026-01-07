@@ -45,6 +45,8 @@ class POIConfig:
 
         for var_name in endpoint_vars:
             endpoint = os.environ.get(var_name, "").strip()
+
+            # check if it starts with http:// or https://
             if endpoint and endpoint.startswith(
                 ("http://", "https://") and endpoint not in endpoints
             ):
