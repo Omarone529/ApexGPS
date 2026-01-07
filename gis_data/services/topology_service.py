@@ -1,4 +1,10 @@
+import logging
+
 from django.db import connection, transaction
+
+logger = logging.getLogger(__name__)
+
+__all__ = ["TopologyService"]
 
 
 class TopologyService:
@@ -49,37 +55,73 @@ class TopologyService:
             if cursor.fetchone()[0] == 0:
                 cursor.execute(
                     """
-                    CREATE INDEX roadsegment_geometry_idx
+                    CREATE INDEX IF NOT EXISTS roadsegment_geometry_idx
                     ON gis_data_roadsegment USING GIST (geometry)
                 """
                 )
 
     @staticmethod
     def _execute_topology_creation(tolerance):
-        """Execute pgRouting topology creation function."""
+        """Execute pgRouting topology creation function with correct parameters."""
         with connection.cursor() as cursor:
-            cursor.execute(
-                f"""
-                SELECT pgr_createTopology(
-                    'gis_data_roadsegment',
-                    {tolerance},
-                    'geometry',
-                    'id',
-                    'source',
-                    'target',
-                    rows_where := 'geometry IS NOT NULL',
-                    clean := TRUE
+            try:
+                # First, try the modern syntax (pgRouting 3.0+)
+                cursor.execute(
+                    f"""
+                    SELECT pgr_createTopology(
+                        'gis_data_roadsegment',
+                        {tolerance},
+                        'geometry',
+                        'id',
+                        'source',
+                        'target'
+                    )
+                """
                 )
-            """
-            )
-            return cursor.fetchone()[0]
+                return cursor.fetchone()[0]
+            except Exception as e:
+                logger.error(f"Modern pgr_createTopology failed: {e}")
+                # Fallback to simpler syntax
+                try:
+                    cursor.execute(
+                        f"""
+                        SELECT pgr_createTopology(
+                            'gis_data_roadsegment',
+                            {tolerance},
+                            'geometry',
+                            'id'
+                        )
+                    """
+                    )
+                    return cursor.fetchone()[0]
+                except Exception as e2:
+                    logger.error(f"Simple pgr_createTopology also failed: {e2}")
+                    # Last resort - direct SQL
+                    cursor.execute(
+                        f"""
+                        SELECT _pgr_createTopology(
+                            'gis_data_roadsegment',
+                            {tolerance},
+                            'geometry',
+                            'id',
+                            'source',
+                            'target',
+                            rows_where := 'geometry IS NOT NULL',
+                            clean := true
+                        )
+                    """
+                    )
+                    return cursor.fetchone()[0]
 
     @staticmethod
     def _get_topology_metrics():
         """Get metrics about created topology (vertices and edges)."""
         with connection.cursor() as cursor:
-            cursor.execute("SELECT COUNT(*) FROM gis_data_roadsegment_vertices_pgr")
-            vertices = cursor.fetchone()[0]
+            try:
+                cursor.execute("SELECT COUNT(*) FROM gis_data_roadsegment_vertices_pgr")
+                vertices = cursor.fetchone()[0]
+            except Exception:
+                vertices = 0
 
             cursor.execute(
                 """
@@ -90,30 +132,6 @@ class TopologyService:
             edges = cursor.fetchone()[0]
 
             return vertices, edges
-
-    @staticmethod
-    @transaction.atomic
-    def create_topology(tolerance=0.00001, force_rebuild=False):
-        """Create or update routing network topology."""
-        existing_columns = TopologyService._check_topology_columns_exist()
-        has_topology = {"source", "target"}.issubset(existing_columns)
-
-        if has_topology and not force_rebuild:
-            return {"status": "exists", "action": "skipped"}
-
-        TopologyService._add_missing_topology_columns(existing_columns)
-        TopologyService._ensure_geometry_index_exists()
-
-        topology_result = TopologyService._execute_topology_creation(tolerance)
-        vertices, edges = TopologyService._get_topology_metrics()
-
-        return {
-            "status": "created",
-            "result": topology_result,
-            "vertices": vertices,
-            "edges": edges,
-            "tolerance": tolerance,
-        }
 
     @staticmethod
     def _check_vertices_table_exists():
@@ -128,6 +146,53 @@ class TopologyService:
             """
             )
             return cursor.fetchone()[0]
+
+    @staticmethod
+    @transaction.atomic
+    def create_topology(tolerance=0.00001, force_rebuild=False):
+        """Create or update routing network topology."""
+        # Check if vertices table already exists
+        vertices_table_exists = TopologyService._check_vertices_table_exists()
+
+        existing_columns = TopologyService._check_topology_columns_exist()
+        has_topology = {"source", "target"}.issubset(existing_columns)
+
+        # If vertices table exists and system is not rebuilding, skip
+        if vertices_table_exists and has_topology and not force_rebuild:
+            logger.info("Topology already exists, skipping creation")
+            vertices, edges = TopologyService._get_topology_metrics()
+            return {
+                "status": "exists",
+                "action": "skipped",
+                "vertices": vertices,
+                "edges": edges,
+            }
+
+        # If forcing rebuild, drop existing topology tables
+        if force_rebuild:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "DROP TABLE IF EXISTS gis_data_roadsegment_vertices_pgr CASCADE;"
+                )
+                cursor.execute(
+                    "UPDATE gis_data_roadsegment SET source = NULL, target = NULL;"
+                )
+
+        # Ensure required columns and index
+        TopologyService._add_missing_topology_columns(existing_columns)
+        TopologyService._ensure_geometry_index_exists()
+
+        # Create topology
+        topology_result = TopologyService._execute_topology_creation(tolerance)
+        vertices, edges = TopologyService._get_topology_metrics()
+
+        return {
+            "status": "created",
+            "result": topology_result,
+            "vertices": vertices,
+            "edges": edges,
+            "tolerance": tolerance,
+        }
 
     @staticmethod
     def _count_disconnected_segments():
@@ -227,8 +292,11 @@ class TopologyService:
     def _count_total_vertices():
         """Count total vertices in routing graph."""
         with connection.cursor() as cursor:
-            cursor.execute("SELECT COUNT(*) FROM gis_data_roadsegment_vertices_pgr")
-            return cursor.fetchone()[0]
+            try:
+                cursor.execute("SELECT COUNT(*) FROM gis_data_roadsegment_vertices_pgr")
+                return cursor.fetchone()[0]
+            except Exception:
+                return 0
 
     @staticmethod
     def get_topology_summary():
