@@ -3,7 +3,7 @@ import os
 import re
 import threading
 import time
-from typing import Any
+from urllib.parse import urlparse
 
 import requests
 from django.contrib.gis.geos import Point
@@ -16,996 +16,550 @@ from gis_data.models import PointOfInterest
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "POIConfig",
-    "POIQueryBuilder",
-    "POIRateLimiter",
-    "POIAPIClient",
+    "EnvironmentConfiguration",
+    "QueryConstructor",
+    "APIClient",
+    "EndpointManager",
+    "RateLimiter",
     "POIDataParser",
-    "POIDataProcessor",
-    "POIDatabaseManager",
-    "POIImportPipeline",
+    "DatabaseOperations",
+    "CategoryImportExecutor",
+    "ImportOrchestrator",
     "Command",
 ]
 
 
-class POIConfig:
-    """Configuration for OSM POI imports."""
+class EnvironmentConfiguration:
+    """Handles environment variable configuration."""
 
-    @staticmethod
-    def get_osm_endpoints() -> list[str]:
-        """Get OSM API endpoints from environment variables."""
+    ENDPOINT_VARIABLES = [
+        "OSM_URL",
+        "OSM_URL_KUMI",
+        "OSM_URL_NCHC",
+        "OSM_URL_CH",
+    ]
+
+    @classmethod
+    def get_environment_endpoints(cls) -> list[str]:
+        """Retrieve all valid endpoints from environment variables."""
         endpoints = []
 
-        endpoint_vars = [
-            "OSM_URL",
-            "OSM_URL_KUMI",
-            "OSM_URL_NCHC",
-            "OSM_URL_CH",
-        ]
-
-        for var_name in endpoint_vars:
-            endpoint = os.environ.get(var_name, "").strip()
-            if endpoint and endpoint.startswith(
-                ("http://", "https://") and endpoint not in endpoints
-            ):
+        for var_name in cls.ENDPOINT_VARIABLES:
+            endpoint = cls._parse_endpoint_variable(var_name)
+            if endpoint:
                 endpoints.append(endpoint)
 
-        if endpoints:
-            logger.info(f"Using {len(endpoints)} OSM endpoints")
-            return endpoints
+        return endpoints
 
-        return [
-            "https://overpass-api.de/api/interpreter",
-            "https://overpass.kumi.systems/api/interpreter",
-        ]
+    @classmethod
+    def _parse_endpoint_variable(cls, var_name: str) -> str | None:
+        """Parse a single environment variable for an endpoint URL."""
+        raw_value = os.environ.get(var_name)
+        if not raw_value:
+            return None
 
-    @staticmethod
-    def get_poi_categories() -> dict[str, list[tuple[str, str]]]:
-        """Get POI categories with their OSM tag combinations."""
-        return {
-            "viewpoint": [
-                ("tourism", "viewpoint"),
-                ("amenity", "viewpoint"),
-                ("natural", "peak"),
-                ("man_made", "tower"),
-            ],
-            "panoramic": [
-                ("tourism", "viewpoint"),
-                ("natural", "peak"),
-                ("man_made", "observation_tower"),
-            ],
-            "mountain_pass": [
-                ("mountain_pass", "yes"),
-                ("natural", "saddle"),
-            ],
-            "lake": [
-                ("natural", "water"),
-                ("water", "lake"),
-                ("landuse", "basin"),
-            ],
-            "historic": [
-                ("historic", "archaeological_site"),
-                ("historic", "castle"),
-                ("historic", "fort"),
-                ("historic", "monument"),
-                ("historic", "ruins"),
-                ("historic", "tomb"),
-                ("historic", "wayside_cross"),
-                ("historic", "wayside_shrine"),
-            ],
-            "castle": [
-                ("historic", "castle"),
-                ("historic", "fort"),
-                ("building", "castle"),
-            ],
-            "church": [
-                ("building", "church"),
-                ("building", "chapel"),
-                ("building", "cathedral"),
-                ("amenity", "place_of_worship"),
-                ("historic", "church"),
-            ],
-            "restaurant": [
-                ("amenity", "restaurant"),
-                ("amenity", "cafe"),
-                ("amenity", "bar"),
-                ("amenity", "fast_food"),
-                ("amenity", "food_court"),
-            ],
-            "park": [
-                ("leisure", "park"),
-                ("leisure", "garden"),
-                ("tourism", "theme_park"),
-            ],
-            "beach": [
-                ("natural", "beach"),
-                ("leisure", "beach_resort"),
-            ],
-        }
+        endpoint = cls._extract_url(raw_value)
+        if endpoint and cls._is_valid_url(endpoint):
+            logger.debug(f"Found endpoint in {var_name}: {endpoint}")
+            return endpoint
+
+        logger.warning(f"Invalid endpoint in {var_name}")
+        return None
 
     @staticmethod
-    def get_area_ids() -> dict[str, str]:
-        """Get mapping of area names to OSM bounding boxes."""
-        return {
-            # Test areas - small bounding boxes
-            "test": "41.89,12.47,41.91,12.49",
-            "rome": "41.89,12.47,41.91,12.49",
-            "milan": "45.46,9.18,45.47,9.19",
-            "florence": "43.77,11.25,43.78,11.26",
-            "test-large": "41.85,12.45,41.95,12.55",
-            "test-tiny": "41.895,12.475,41.900,12.480",
-            "italy": "35.29,6.62,47.10,18.52",
-            "abruzzo": "41.55,13.08,42.90,14.85",
-            "basilicata": "39.90,15.40,41.35,16.85",
-            "calabria": "37.90,15.65,40.30,17.20",
-            "campania": "40.00,13.70,41.65,15.95",
-            "emilia-romagna": "43.75,9.48,45.10,12.75",
-            "friuli-venezia-giulia": "45.60,12.45,46.65,13.90",
-            "lazio": "41.20,11.50,42.85,14.00",
-            "liguria": "43.75,7.60,44.70,10.00",
-            "lombardia": "44.68,8.52,46.62,11.55",
-            "marche": "42.65,12.85,43.95,14.05",
-            "molise": "41.40,14.00,42.05,15.30",
-            "piemonte": "44.05,6.62,46.47,9.32",
-            "puglia": "39.80,15.90,42.20,18.52",
-            "sardegna": "38.87,8.12,41.25,9.85",
-            "sicilia": "36.65,12.42,38.27,15.65",
-            "toscana": "42.20,9.70,44.50,12.38",
-            "trentino-alto-adige": "45.65,10.40,47.10,12.45",
-            "umbria": "42.35,11.90,43.65,13.25",
-            "valle-daosta": "45.60,6.85,45.95,7.85",
-            "veneto": "44.78,10.58,46.72,13.05",
-        }
+    def _extract_url(text: str) -> str | None:
+        """Extract first URL from text."""
+        # Simple URL pattern matching
+        url_pattern = r'https?://[^\s<>"\'{}|\\^`\[\]]+'
+        match = re.search(url_pattern, text)
+        return match.group(0) if match else None
 
     @staticmethod
-    def normalize_area_name(area_name: str) -> str:
-        """Normalize area name for lookup."""
-        return area_name.lower().replace(" ", "-")
-
-    @staticmethod
-    def validate_area_name(area_name: str) -> tuple[bool, str]:
-        """Validate that area name is supported."""
-        area_name_norm = POIConfig.normalize_area_name(area_name)
-        area_ids = POIConfig.get_area_ids()
-
-        if area_name_norm in area_ids:
-            return True, ""
-
-        available = ", ".join(sorted(area_ids.keys()))
-        return False, f"Unknown area: {area_name}. Available: {available}"
-
-    @staticmethod
-    def get_available_categories() -> list[str]:
-        """Get list of available POI categories."""
-        return list(POIConfig.get_poi_categories().keys())
+    def _is_valid_url(url: str) -> bool:
+        """Validate URL format."""
+        try:
+            result = urlparse(url)
+            return all([result.scheme in ("http", "https"), result.netloc])
+        except Exception:
+            return False
 
 
-class POIQueryBuilder:
-    """Builder for OSM Overpass queries for POIs."""
+class QueryConstructor:
+    """Constructs Overpass API queries."""
 
-    @staticmethod
-    def build_poi_query(category: str, bbox: str) -> str:
-        """Build Overpass query for POIs in bounding box."""
-        categories = POIConfig.get_poi_categories()
+    CATEGORY_MAPPING = {
+        "viewpoint": [("tourism", "viewpoint")],
+        "restaurant": [("amenity", "restaurant")],
+        "church": [("building", "church")],
+        "historic": [("historic", "archaeological_site"), ("historic", "castle")],
+    }
 
-        if category not in categories:
-            return ""
+    @classmethod
+    def build_query(cls, category: str, bbox: str) -> str:
+        """Build Overpass query for a category."""
+        if category not in cls.CATEGORY_MAPPING:
+            raise ValueError(f"Unknown category: {category}")
 
-        tag_combinations = categories[category]
-
-        # Build query parts for each tag combination
+        tag_conditions = cls.CATEGORY_MAPPING[category]
         query_parts = []
-        for tag_key, tag_value in tag_combinations:
+
+        for tag_key, tag_value in tag_conditions:
             query_parts.append(f'node["{tag_key}"="{tag_value}"]({bbox});')
             query_parts.append(f'way["{tag_key}"="{tag_value}"]({bbox});')
-            query_parts.append(f'relation["{tag_key}"="{tag_value}"]({bbox});')
 
-        # Combine all query parts
         query_body = "\n  ".join(query_parts)
 
-        # Build the complete query
-        query = f"""[out:json][timeout:300];
+        # Simplified query from documentation
+        query = f"""[out:json][timeout:180];
         (
           {query_body}
         );
         out center;
-        >;
-        out skel qt;
         """
 
-        logger.debug(f"Generated query for {category}:\n{query}")
         return query
 
-    @staticmethod
-    def build_simple_poi_query(category: str, bbox: str) -> str:
-        """Build a simpler query for testing."""
-        categories = POIConfig.get_poi_categories()
 
-        if category not in categories:
-            return ""
-
-        # Use just the first tag combination for simplicity
-        tag_key, tag_value = categories[category][0]
-
-        return f"""[out:json][timeout:180];
-        node["{tag_key}"="{tag_value}"]({bbox});
-        out body;
-        """
-
-
-class POIRateLimiter:
-    """Rate limiter for API requests."""
-
-    def __init__(self):
-        """Initialize rate limiter."""
-        try:
-            self.requests_per_minute = int(os.environ.get("OSM_RATE_LIMIT", "10"))
-        except ValueError:
-            self.requests_per_minute = 10
-
-        self.min_delay = 60.0 / self.requests_per_minute
-        self.last_request_time = 0
-        self.lock = threading.Lock()
-
-    def wait_if_needed(self):
-        """Wait if needed to respect rate limits."""
-        with self.lock:
-            current_time = time.time()
-            time_since_last = current_time - self.last_request_time
-
-            if time_since_last < self.min_delay:
-                wait_time = self.min_delay - time_since_last
-                time.sleep(wait_time)
-
-            self.last_request_time = time.time()
-
-
-class POIAPIClient:
-    """Client for making requests to OSM Overpass API for POIs."""
+class APIClient:
+    """HTTP client for Overpass API requests."""
 
     def __init__(self):
         """Initialize client."""
-        self.endpoints = POIConfig.get_osm_endpoints()
-        self.current_endpoint_index = 0
-        self.rate_limiter = POIRateLimiter()
         self.session = requests.Session()
         self.session.headers.update(
             {
-                "User-Agent": "ApexGPS-POI-Importer/1.0 (https://github.com/apexgps)",
+                "User-Agent": "ApexGPS-POI-Importer/1.0",
                 "Accept": "application/json",
-                "Accept-Encoding": "gzip, deflate",
             }
         )
 
-    def fetch_pois_for_category(
-        self, category: str, area_name: str
-    ) -> dict[str, Any] | None:
-        """Fetch POI data for a category and area."""
-        area_name_norm = POIConfig.normalize_area_name(area_name)
-        area_ids = POIConfig.get_area_ids()
-
-        if area_name_norm not in area_ids:
-            logger.error(f"Unknown area: {area_name}")
-            return None
-
-        bbox = area_ids[area_name_norm]
-
-        # Apply rate limiting
-        self.rate_limiter.wait_if_needed()
-
-        # Try simple query first, then regular
-        strategies = [
-            self._try_simple_query,
-            self._try_regular_query,
-        ]
-
-        for strategy in strategies:
-            data = strategy(category, bbox, area_name)
-            if data and data.get("elements"):
-                return data
-
-        return None
-
-    def _try_simple_query(
-        self, category: str, bbox: str, area_name: str
-    ) -> dict[str, Any] | None:
-        """Try a simple query first."""
-        logger.info(f"Trying simple query for {category} in {area_name}")
-        query = POIQueryBuilder.build_simple_poi_query(category, bbox)
-        return self._make_request(query, f"simple {category} query for {area_name}")
-
-    def _try_regular_query(
-        self, category: str, bbox: str, area_name: str
-    ) -> dict[str, Any] | None:
-        """Try the regular query."""
-        logger.info(f"Trying regular query for {category} in {area_name}")
-        query = POIQueryBuilder.build_poi_query(category, bbox)
-        return self._make_request(query, f"regular {category} query for {area_name}")
-
-    def _make_request(self, query: str, description: str) -> dict[str, Any] | None:
-        """Make a request to Overpass API."""
-        if not query:
-            logger.error(f"Empty query for {description}")
-            return None
-
-        compressed_query = " ".join(query.strip().split())
-
+    def execute_query(
+        self, endpoint: str, query: str, timeout: int = 120
+    ) -> dict | None:
+        """Execute Overpass query and return parsed JSON."""
         try:
-            timeout = int(os.environ.get("OSM_TIMEOUT", "300"))
-            max_retries = int(os.environ.get("OSM_MAX_RETRIES", "3"))
-        except ValueError:
-            timeout = 300
-            max_retries = 3
+            response = self.session.post(
+                endpoint, data={"data": query}, timeout=timeout
+            )
 
-        for attempt in range(max_retries):
-            endpoint = self.endpoints[self.current_endpoint_index % len(self.endpoints)]
-            self.current_endpoint_index += 1
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logger.warning(f"HTTP {response.status_code} from {endpoint}")
+                return None
 
-            try:
-                logger.info(
-                    f"Fetching {description} (attempt {attempt + 1}/{max_retries})"
-                )
+        except requests.exceptions.Timeout:
+            logger.warning(f"Timeout from {endpoint}")
+            return None
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Request error from {endpoint}: {e}")
+            return None
 
-                response = self.session.post(
-                    endpoint,
-                    data={"data": compressed_query},
-                    timeout=timeout,
-                )
 
-                if response.status_code == 200:
-                    data = response.json()
-                    if "elements" in data:
-                        logger.info(
-                            f"✓ Successfully fetched {len(data['elements'])} elements"
-                        )
-                        return data
-                    else:
-                        logger.warning("Response missing 'elements' key")
-                elif response.status_code == 400:
-                    logger.warning("Bad request (400) - query syntax may be invalid")
-                    logger.debug(f"Problematic query: {query[:500]}...")
-                    time.sleep(10)
-                elif response.status_code == 504:
-                    logger.warning("Gateway timeout (504)")
-                    time.sleep(30)
-                elif response.status_code == 429:
-                    logger.warning("Rate limited (429)")
-                    time.sleep(60)
-                else:
-                    logger.warning(f"Request failed with status {response.status_code}")
-                    time.sleep(10)
+class EndpointManager:
+    """Manages OSM endpoint selection and failover."""
 
-            except requests.exceptions.Timeout:
-                logger.warning(f"Timeout for {description}")
-                time.sleep(30)
-            except requests.exceptions.RequestException as e:
-                logger.warning(f"Request error: {e}")
-                time.sleep(10)
-            except Exception as e:
-                logger.warning(f"Unexpected error: {e}")
-                time.sleep(10)
+    DEFAULT_ENDPOINTS = [
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.openstreetmap.fr/api/interpreter",
+    ]
 
-        logger.error(
-            f"Failed to fetch data for {description} after {max_retries} attempts"
-        )
-        return None
+    def __init__(self):
+        """Initialize endpoint manager."""
+        self.endpoints = self._gather_endpoints()
+        self.current_index = 0
+
+    def _gather_endpoints(self) -> list[str]:
+        """Gather all available endpoints."""
+        endpoints = EnvironmentConfiguration.get_environment_endpoints()
+
+        if not endpoints:
+            logger.info("Using default endpoints")
+            endpoints = self.DEFAULT_ENDPOINTS
+
+        logger.info(f"Available endpoints: {len(endpoints)}")
+        return endpoints
+
+    def get_next_endpoint(self) -> str:
+        """Get next endpoint in round-robin fashion."""
+        if not self.endpoints:
+            raise ValueError("No endpoints available")
+
+        endpoint = self.endpoints[self.current_index]
+        self.current_index = (self.current_index + 1) % len(self.endpoints)
+        return endpoint
+
+
+class RateLimiter:
+    """Simple rate limiter for API calls."""
+
+    def __init__(self, requests_per_minute: int = 5):
+        """Initialize RateLimiter."""
+        self.delay = 60.0 / requests_per_minute
+        self.last_call = 0
+        self.lock = threading.Lock()
+
+    def wait(self):
+        """Wait if needed to respect rate limits."""
+        with self.lock:
+            now = time.time()
+            elapsed = now - self.last_call
+
+            if elapsed < self.delay:
+                time.sleep(self.delay - elapsed)
+
+            self.last_call = time.time()
 
 
 class POIDataParser:
-    """Parser for OSM POI data and tags."""
+    """Parses OSM element data into POI objects."""
 
     @staticmethod
-    def parse_elevation(elevation_str: str | None) -> float | None:
-        """Parse elevation string to float."""
-        if not elevation_str:
-            return None
-
+    def parse_element(element: dict, category: str) -> dict | None:
+        """Parse OSM element into POI dictionary."""
         try:
-            elevation_str = str(elevation_str).lower()
-            elevation_str = re.sub(r"[^0-9.\-]", "", elevation_str)
-            return float(elevation_str)
-        except (ValueError, TypeError):
+            # Extract coordinates
+            coords = POIDataParser._get_coordinates(element)
+            if not coords:
+                return None
+
+            tags = element.get("tags", {})
+
+            return {
+                "osm_id": element.get("id"),
+                "name": POIDataParser._get_name(tags, category, element.get("id", 0)),
+                "category": category,
+                "location": Point(coords[0], coords[1], srid=4326),
+                "description": POIDataParser._get_description(tags, category),
+                "tags": tags,
+            }
+        except Exception as e:
+            logger.debug(f"Failed to parse element: {e}")
             return None
 
     @staticmethod
-    def extract_coordinates(element: dict[str, Any]) -> tuple[float, float] | None:
+    def _get_coordinates(element: dict) -> tuple | None:
         """Extract coordinates from OSM element."""
-        try:
-            # Direct lat/lon for nodes
-            if element.get("type") == "node":
-                lat = element.get("lat")
-                lon = element.get("lon")
-                if lat is not None and lon is not None:
-                    return float(lon), float(lat)
+        # Node coordinates
+        if element.get("type") == "node":
+            lat = element.get("lat")
+            lon = element.get("lon")
+            if lat and lon:
+                return float(lon), float(lat)
 
-            # Center for ways/relations
-            if element.get("center"):
-                lat = element.get("center", {}).get("lat")
-                lon = element.get("center", {}).get("lon")
-                if lat is not None and lon is not None:
-                    return float(lon), float(lat)
+        # Center coordinates for ways/relations
+        center = element.get("center", {})
+        lat = center.get("lat")
+        lon = center.get("lon")
+        if lat and lon:
+            return float(lon), float(lat)
 
-            # Geometry
-            if element.get("geometry"):
-                geometry = element.get("geometry", [])
-                if geometry and isinstance(geometry, list) and len(geometry) > 0:
-                    point = geometry[0]
-                    lat = point.get("lat")
-                    lon = point.get("lon")
-                    if lat is not None and lon is not None:
-                        return float(lon), float(lat)
-
-            return None
-
-        except (ValueError, TypeError, KeyError, AttributeError) as e:
-            logger.debug(f"Error extracting coordinates: {e}")
-            return None
+        return None
 
     @staticmethod
-    def extract_name(tags: dict[str, Any], category: str, element_id: int) -> str:
-        """Extract name from OSM tags."""
+    def _get_name(tags: dict, category: str, element_id: int) -> str:
+        """Extract name from tags."""
         name = tags.get("name")
         if name:
             return str(name)[:200]
 
-        # Category-specific fallbacks
-        if category == "viewpoint":
-            description = (
-                tags.get("description") or tags.get("note") or tags.get("information")
-            )
-            if description:
-                return str(description)[:200]
+        description = tags.get("description")
+        if description:
+            return str(description)[:200]
 
-        if category == "mountain_pass":
-            pass_name = (
-                tags.get("name:en") or tags.get("name:it") or tags.get("name:de")
-            )
-            if pass_name:
-                return str(pass_name)[:200]
-
-        # Generic fallback
         return f"{category.title()} #{element_id}"
 
     @staticmethod
-    def extract_description(tags: dict[str, Any], category: str) -> str:
-        """Extract description from OSM tags."""
-        description_parts = []
+    def _get_description(tags: dict, category: str) -> str:
+        """Create description from tags."""
+        parts = []
 
-        # Primary description
         if tags.get("description"):
-            desc = str(tags["description"]).strip()
-            if desc:
-                description_parts.append(desc[:150])
+            parts.append(tags["description"][:150])
 
-        # Elevation
-        elevation = POIDataParser.parse_elevation(tags.get("ele"))
-        if elevation is not None:
-            description_parts.append(f"Elevation: {elevation:.0f}m")
-
-        # Additional info
         if tags.get("historic"):
-            description_parts.append(f"Historic: {tags['historic']}")
+            parts.append(f"Historic: {tags['historic']}")
 
         if tags.get("amenity"):
-            description_parts.append(f"Amenity: {tags['amenity']}")
+            parts.append(f"Amenity: {tags['amenity']}")
 
-        if tags.get("tourism"):
-            description_parts.append(f"Tourism: {tags['tourism']}")
-
-        if tags.get("wikidata"):
-            description_parts.append(f"Wikidata: {tags['wikidata']}")
-
-        # Join parts
-        if description_parts:
-            return " | ".join(description_parts)
-
-        # Default description
-        return f"{category.replace('_', ' ').title()} point of interest"
+        return " | ".join(parts) if parts else f"{category.replace('_', ' ').title()}"
 
 
-class POIDataProcessor:
-    """Processor for OSM POI JSON data."""
-
-    def __init__(self, category: str):
-        """Initialize data processor."""
-        self.category = category
-        self.elements: list[dict[str, Any]] = []
-        self.valid_pois: list[dict[str, Any]] = []
-
-    def process_osm_data(self, osm_data: dict[str, Any]) -> None:
-        """Extract POI elements from OSM data."""
-        self.elements = osm_data.get("elements", [])
-        logger.info(f"Processing {len(self.elements)} elements for {self.category}")
-
-    def is_element_valid(self, element: dict[str, Any]) -> bool:
-        """Check if element is valid for processing."""
-        if "id" not in element:
-            return False
-
-        # Check if it has coordinates
-        coords = POIDataParser.extract_coordinates(element)
-        if not coords:
-            return False
-        return coords
-
-    def create_poi_data(self, element: dict[str, Any]) -> dict[str, Any] | None:
-        """Create POI data dictionary from OSM element."""
-        if not self.is_element_valid(element):
-            return None
-
-        coords = POIDataParser.extract_coordinates(element)
-        if not coords:
-            return None
-
-        tags = element.get("tags", {})
-
-        name = POIDataParser.extract_name(tags, self.category, element["id"])
-        description = POIDataParser.extract_description(tags, self.category)
-        elevation = POIDataParser.parse_elevation(tags.get("ele"))
-
-        try:
-            point = Point(coords[0], coords[1], srid=4326)
-        except Exception as e:
-            logger.debug(f"Failed to create Point: {e}")
-            return None
-
-        return {
-            "osm_id": element["id"],
-            "name": name,
-            "category": self.category,
-            "location": point,
-            "description": description[:500],
-            "elevation": elevation,
-            "tags": tags,
-        }
-
-    def process_all_elements(self) -> list[dict[str, Any]]:
-        """Process all elements and create POI data."""
-        self.valid_pois = []
-
-        for i, element in enumerate(self.elements):
-            poi_data = self.create_poi_data(element)
-            if poi_data:
-                self.valid_pois.append(poi_data)
-
-            # Log progress for large imports
-            if i > 0 and i % 1000 == 0:
-                logger.info(f"Processed {i:,}/{len(self.elements):,} elements...")
-
-        logger.info(f"Created {len(self.valid_pois)} valid POIs for {self.category}")
-        return self.valid_pois
-
-
-class POIDatabaseManager:
-    """Manager for POI database operations."""
-
-    @staticmethod
-    def clear_existing_pois() -> int:
-        """Clear all existing POIs."""
-        count = PointOfInterest.objects.count()
-        PointOfInterest.objects.all().delete()
-        return count
-
-    @staticmethod
-    def clear_category_pois(category: str) -> int:
-        """Clear existing POIs for a specific category."""
-        count = PointOfInterest.objects.filter(category=category).count()
-        PointOfInterest.objects.filter(category=category).delete()
-        return count
+class DatabaseOperations:
+    """Handles database operations for POIs."""
 
     @staticmethod
     @transaction.atomic
-    def save_pois_batch(pois: list[dict[str, Any]], batch_num: int) -> tuple[bool, int]:
-        """Save a batch of POIs to database."""
+    def save_category_pois(pois: list[dict], category: str) -> int:
+        """Save POIs for a specific category."""
         if not pois:
-            return True, 0
-
-        try:
-            poi_objects = []
-            for poi_data in pois:
-                poi_objects.append(PointOfInterest(**poi_data))
-
-            created = PointOfInterest.objects.bulk_create(
-                poi_objects, ignore_conflicts=True, batch_size=len(poi_objects)
-            )
-
-            saved_count = len(created)
-            logger.info(f"Batch {batch_num}: Saved {saved_count} POIs")
-            return True, saved_count
-
-        except Exception as e:
-            logger.error(f"Batch {batch_num}: Failed to save POIs - {e}")
-            return False, 0
-
-    @staticmethod
-    def save_all_pois(pois: list[dict[str, Any]], batch_size: int = 1000) -> int:
-        """Save all POIs to database in batches."""
-        if not pois:
-            logger.warning("No POIs to save")
             return 0
 
-        total_pois = len(pois)
-        total_saved = 0
+        # Clear existing category POIs
+        deleted = PointOfInterest.objects.filter(category=category).delete()[0]
+        if deleted:
+            logger.info(f"Cleared {deleted} existing {category} POIs")
 
-        logger.info(f"Saving {total_pois:,} POIs...")
+        # Create new POIs
+        poi_objects = []
+        for poi_data in pois:
+            poi_objects.append(PointOfInterest(**poi_data))
 
-        for i in range(0, total_pois, batch_size):
-            batch = pois[i : i + batch_size]
-            batch_num = i // batch_size + 1
-
-            success, saved = POIDatabaseManager.save_pois_batch(batch, batch_num)
-            if success:
-                total_saved += saved
-
-        logger.info(f"Saved {total_saved:,}/{total_pois:,} POIs")
-        return total_saved
+        try:
+            saved = PointOfInterest.objects.bulk_create(
+                poi_objects, ignore_conflicts=True, batch_size=500
+            )
+            logger.info(f"Saved {len(saved)} {category} POIs")
+            return len(saved)
+        except Exception as e:
+            logger.error(f"Failed to save {category} POIs: {e}")
+            return 0
 
     @staticmethod
-    def get_database_stats() -> dict[str, Any]:
-        """Get database statistics with intelligent formatting."""
+    def get_database_summary() -> dict:
+        """Get database statistics."""
         total = PointOfInterest.objects.count()
 
-        # Get category statistics with counts
         category_stats = (
             PointOfInterest.objects.values("category")
             .annotate(count=Count("id"))
             .order_by("-count")
         )
 
-        # Format categories intelligently (top 5 only)
-        categories_summary = []
-        total_shown = 0
-
-        for stat in category_stats[:5]:  # Show only top 5
-            percentage = (stat["count"] / total * 100) if total > 0 else 0
-            categories_summary.append(
-                {
-                    "category": stat["category"],
-                    "count": stat["count"],
-                    "percentage": round(percentage, 1),
-                }
-            )
-            total_shown += stat["count"]
-
-        # Add summary for remaining categories
-        remaining_count = total - total_shown
-        remaining_categories = len(category_stats) - 5
-
-        if remaining_count > 0 and remaining_categories > 0:
-            categories_summary.append(
-                {
-                    "category": f"Other ({remaining_categories} categories)",
-                    "count": remaining_count,
-                    "percentage": round((remaining_count / total * 100), 1)
-                    if total > 0
-                    else 0,
-                }
-            )
-
         return {
-            "total_pois": total,
-            "unique_categories": len(category_stats),
-            "categories_summary": categories_summary,
-            "category_stats": list(category_stats),  # Full data if needed
+            "total": total,
+            "categories": list(category_stats),
         }
 
 
-class CategoryImporter:
-    """Importer for a single POI category."""
+class CategoryImportExecutor:
+    """Executes import for a single category."""
 
     def __init__(self, category: str, area_name: str):
-        """Initialize the importer."""
+        """Initialize category import."""
         self.category = category
         self.area_name = area_name
-        self.stats = {
-            "elements_fetched": 0,
+        self.endpoint_manager = EndpointManager()
+        self.api_client = APIClient()
+        self.rate_limiter = RateLimiter()
+        self.parser = POIDataParser()
+
+    def execute(self) -> dict:
+        """Execute import for this category."""
+        logger.info(f"Importing {self.category} for {self.area_name}")
+
+        # Simplified bbox - should come from configuration
+        bbox = "41.89,12.47,41.91,12.49"
+
+        # Build query
+        query = QueryConstructor.build_query(self.category, bbox)
+
+        # Try each endpoint
+        for _ in range(len(self.endpoint_manager.endpoints)):
+            self.rate_limiter.wait()
+
+            endpoint = self.endpoint_manager.get_next_endpoint()
+            logger.info(f"Trying {endpoint} for {self.category}")
+
+            data = self.api_client.execute_query(endpoint, query)
+            if not data:
+                continue
+
+            elements = data.get("elements", [])
+            if not elements:
+                logger.warning(f"No {self.category} elements found")
+                continue
+
+            # Parse elements
+            pois = []
+            for element in elements:
+                poi = self.parser.parse_element(element, self.category)
+                if poi:
+                    pois.append(poi)
+
+            if not pois:
+                logger.warning(f"No valid {self.category} POIs created")
+                continue
+
+            # Save to database
+            saved = DatabaseOperations.save_category_pois(pois, self.category)
+
+            return {
+                "success": True,
+                "category": self.category,
+                "elements": len(elements),
+                "pois_created": len(pois),
+                "pois_saved": saved,
+            }
+
+        return {
+            "success": False,
+            "category": self.category,
+            "error": "All endpoints failed",
+        }
+
+
+class ImportOrchestrator:
+    """Orchestrates the import of multiple categories."""
+
+    def __init__(self, categories: list[str], area_name: str):
+        """Initialize orchestrator."""
+        self.categories = categories
+        self.area_name = area_name
+
+    def run(self) -> dict:
+        """Run import for all categories."""
+        logger.info(f"Starting POI import for {self.area_name}")
+        start_time = time.time()
+
+        results = []
+        stats = {
+            "categories": 0,
+            "elements": 0,
             "pois_created": 0,
             "pois_saved": 0,
         }
 
-    def import_category(self, clear_existing: bool = False) -> dict[str, Any]:
-        """Import POIs for a single category."""
-        logger.info(f"Importing {self.category} POIs for {self.area_name}")
-
-        try:
-            # Clear existing POIs for this category if requested
-            if clear_existing:
-                deleted = POIDatabaseManager.clear_category_pois(self.category)
-                logger.info(f"Cleared {deleted} existing {self.category} POIs")
-
-            # Fetch data from OSM
-            api_client = POIAPIClient()
-            data = api_client.fetch_pois_for_category(self.category, self.area_name)
-
-            if not data:
-                return {
-                    "success": False,
-                    "error": f"Failed to fetch data for {self.category}",
-                    "stats": self.stats,
-                }
-
-            self.stats["elements_fetched"] = len(data.get("elements", []))
-
-            if self.stats["elements_fetched"] == 0:
-                return {
-                    "success": False,
-                    "error": f"No {self.category} elements found in {self.area_name}",
-                    "stats": self.stats,
-                }
-
-            logger.info(
-                f"✓ Fetched {self.stats['elements_fetched']:,} {self.category} elements"
-            )
-
-            # Process data
-            data_processor = POIDataProcessor(self.category)
-            data_processor.process_osm_data(data)
-            pois = data_processor.process_all_elements()
-
-            self.stats["pois_created"] = len(pois)
-
-            if self.stats["pois_created"] == 0:
-                return {
-                    "success": False,
-                    "error": f"No valid {self.category} POIs could be created",
-                    "stats": self.stats,
-                }
-
-            logger.info(
-                f"✓ Created {self.stats['pois_created']:,} {self.category} POIs"
-            )
-
-            # Save to database
-            saved_count = POIDatabaseManager.save_all_pois(pois)
-            self.stats["pois_saved"] = saved_count
-
-            return {
-                "success": True,
-                "pois_saved": saved_count,
-                "stats": self.stats,
-            }
-
-        except Exception as e:
-            logger.error(f"Error importing {self.category} POIs: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "stats": self.stats,
-            }
-
-
-class POIImportPipeline:
-    """Main pipeline for importing POIs."""
-
-    def __init__(self):
-        """Initialize pipeline."""
-        self.stats = {
-            "categories_processed": 0,
-            "total_elements_fetched": 0,
-            "total_pois_created": 0,
-            "total_pois_saved": 0,
-        }
-
-    def import_categories(
-        self, categories: list[str], area_name: str, clear_existing: bool = False
-    ) -> dict[str, Any]:
-        """Import multiple POI categories."""
-        logger.info(f"Starting POI import for area: {area_name}")
-
-        start_time = time.time()
-        results = []
-        errors = []
-
-        for category in categories:
-            category_importer = CategoryImporter(category, area_name)
-            result = category_importer.import_category(clear_existing)
+        for category in self.categories:
+            executor = CategoryImportExecutor(category, self.area_name)
+            result = executor.execute()
             results.append(result)
 
-            # Update overall statistics
-            self.stats["categories_processed"] += 1
-            self.stats["total_elements_fetched"] += result["stats"]["elements_fetched"]
-            self.stats["total_pois_created"] += result["stats"]["pois_created"]
-            self.stats["total_pois_saved"] += result["stats"]["pois_saved"]
+            if result["success"]:
+                stats["categories"] += 1
+                stats["elements"] += result["elements"]
+                stats["pois_created"] += result["pois_created"]
+                stats["pois_saved"] += result["pois_saved"]
 
-            if not result["success"]:
-                errors.append(f"{category}: {result.get('error', 'Unknown error')}")
+        elapsed = time.time() - start_time
 
-        total_time = time.time() - start_time
-
-        # Summary log with clean formatting
-        if self.stats["total_pois_saved"] > 0:
-            logger.info("=" * 60)
-            logger.info("✓ POI IMPORT COMPLETED SUCCESSFULLY")
-            logger.info(f"Total time: {total_time:.1f}s")
-            logger.info(f"Categories processed: {self.stats['categories_processed']}")
-            logger.info(f"Elements fetched: {self.stats['total_elements_fetched']:,}")
-            logger.info(f"POIs created: {self.stats['total_pois_created']:,}")
-            logger.info(f"POIs saved: {self.stats['total_pois_saved']:,}")
-
-            # Get category breakdown for summary
-            category_stats = (
-                PointOfInterest.objects.values("category")
-                .annotate(count=Count("id"))
-                .order_by("-count")[:3]
-            )  # Show top 3 in summary
-
-            if category_stats:
-                logger.info("🏷️  Top categories:")
-                for stat in category_stats:
-                    percentage = stat["count"] / self.stats["total_pois_saved"] * 100
-                    logger.info(
-                        f"   {stat['category']}: {stat['count']:,} ({percentage:.1f}%)"
-                    )
-
-            logger.info("=" * 60)
-
-            return {
-                "success": True,
-                "pois_saved": self.stats["total_pois_saved"],
-                "errors": errors,
-                "stats": self.stats,
-            }
-        else:
-            logger.error("=" * 60)
-            logger.error("✗ POI IMPORT FAILED")
-            logger.error("No POIs were saved")
-            if errors:
-                logger.error("Errors:")
-                for error in errors:
-                    logger.error(f"  - {error}")
-            logger.error("=" * 60)
-
-            return {
-                "success": False,
-                "pois_saved": 0,
-                "errors": errors,
-                "stats": self.stats,
-            }
+        return {
+            "success": stats["pois_saved"] > 0,
+            "statistics": stats,
+            "results": results,
+            "duration": elapsed,
+        }
 
 
 class Command(BaseCommand):
-    """Import OSM Points of Interest command."""
+    """Django management command for OSM POI import."""
 
     help = "Import Points of Interest from OpenStreetMap"
 
     def add_arguments(self, parser):
-        """Add command arguments."""
+        """Adds arguments required for the command."""
         parser.add_argument(
             "--area",
-            type=str,
             default="test",
-            help="Area to import (test, italy, lazio, lombardia, etc.)",
+            help="Area name for import",
         )
         parser.add_argument(
             "--categories",
-            type=str,
             default="viewpoint,restaurant,church,historic",
-            help="Comma-separated list of categories to import or 'all'",
-        )
-        parser.add_argument(
-            "--clear",
-            action="store_true",
-            default=True,
-            help="Clear existing POIs before import (default: True)",
-        )
-        parser.add_argument(
-            "--no-clear",
-            action="store_false",
-            dest="clear",
-            help="Do not clear existing POIs before import",
+            help="Comma-separated categories to import",
         )
         parser.add_argument(
             "--verbose",
             action="store_true",
-            help="Show detailed output",
+            help="Enable verbose output",
         )
 
     def handle(self, *args, **options):
-        """Handle command execution."""
-        # Setup logging
-        if options["verbose"]:
-            logging.basicConfig(
-                level=logging.DEBUG,
-                format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            )
-        else:
-            logging.basicConfig(
-                level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-            )
-
-        area_name = options["area"]
+        """Execute the command."""
+        self._setup_logging(options["verbose"])
 
         # Parse categories
-        if options["categories"].lower() == "all":
-            categories = POIConfig.get_available_categories()
-        else:
-            categories = []
-            for cat in options["categories"].split(","):
-                cat = cat.strip().lower()
-                if cat in POIConfig.get_available_categories():
-                    categories.append(cat)
-
+        categories = self._parse_categories(options["categories"])
         if not categories:
-            self.stdout.write(self.style.ERROR("No valid categories specified"))
+            self.stdout.write("Error: No valid categories specified")
             return
 
-        # Display header
-        self.display_header(area_name, categories, options)
+        # Display configuration
+        self._print_header(options["area"], categories)
 
-        # Run import
-        pipeline = POIImportPipeline()
-        result = pipeline.import_categories(
-            categories=categories, area_name=area_name, clear_existing=options["clear"]
-        )
+        # Execute import
+        orchestrator = ImportOrchestrator(categories, options["area"])
+        result = orchestrator.run()
 
         # Display results
-        self.display_results(result)
+        self._print_results(result)
 
-    def display_header(self, area_name: str, categories: list[str], options):
-        """Display command header."""
+    def _setup_logging(self, verbose: bool):
+        """Configure logging level."""
+        level = logging.DEBUG if verbose else logging.INFO
+        logging.basicConfig(
+            level=level,
+            format="%(asctime)s - %(levelname)s - %(message)s",
+        )
+
+    def _parse_categories(self, categories_str: str) -> list[str]:
+        """Parse categories string into list."""
+        valid_categories = {"viewpoint", "restaurant", "church", "historic"}
+
+        categories = []
+        for cat in categories_str.split(","):
+            cat = cat.strip().lower()
+            if cat in valid_categories:
+                categories.append(cat)
+
+        return categories
+
+    def _print_header(self, area: str, categories: list[str]):
+        """Print command header."""
         self.stdout.write("=" * 60)
         self.stdout.write("OSM POI IMPORT")
         self.stdout.write("=" * 60)
-        self.stdout.write(f"Area: {area_name}")
+        self.stdout.write(f"Area: {area}")
         self.stdout.write(f"Categories: {', '.join(categories)}")
-        self.stdout.write(f"Clear existing: {'Yes' if options['clear'] else 'No'}")
+        self.stdout.write("=" * 60)
+        self.stdout.write("")
+
+    def _print_results(self, result: dict):
+        """Print import results."""
         self.stdout.write("=" * 60)
 
-    def display_results(self, result: dict[str, Any]):
-        """Display results for import with intelligent formatting."""
-        self.stdout.write("\n" + "=" * 60)
-
-        if result.get("success"):
-            self.stdout.write(self.style.SUCCESS("✓ IMPORT SUCCESSFUL"))
-            stats = result.get("stats", {})
-
-            self.stdout.write("\nStatistics:")
-            self.stdout.write(
-                f"  Categories processed: {stats.get('categories_processed', 0)}"
-            )
-            self.stdout.write(
-                f"  Elements fetched:     {stats.get('total_elements_fetched', 0):,}"
-            )
-            self.stdout.write(
-                f"  POIs created:         {stats.get('total_pois_created', 0):,}"
-            )
-            self.stdout.write(
-                f"  POIs saved:           {stats.get('total_pois_saved', 0):,}"
-            )
-
-            # Get database stats with intelligent formatting
-            db_stats = POIDatabaseManager.get_database_stats()
-            self.stdout.write("\nDatabase:")
-            self.stdout.write(f"  Total POIs:          {db_stats['total_pois']:,}")
-            self.stdout.write(f"  Unique categories:   {db_stats['unique_categories']}")
-
-            # Show category breakdown intelligently
-            if db_stats["categories_summary"]:
-                self.stdout.write("\nCategory breakdown:")
-                for cat_info in db_stats["categories_summary"]:
-                    if isinstance(cat_info, dict):
-                        # New format with dictionary
-                        self.stdout.write(
-                            f"  {cat_info['category']:25}"
-                            f" {cat_info['count']:6,}"
-                            f" ({cat_info['percentage']:.1f}%)"
-                        )
-                    else:
-                        # Old format for compatibility
-                        self.stdout.write(f"  {cat_info}")
-
+        if result["success"]:
+            self.stdout.write("IMPORT SUCCESSFUL")
         else:
-            self.stdout.write(self.style.ERROR("✗ IMPORT FAILED"))
-            if result.get("errors"):
-                self.stdout.write("\nErrors:")
-                for error in result["errors"]:
-                    self.stdout.write(f"  - {error}")
+            self.stdout.write("IMPORT FAILED")
 
-            # Show partial statistics if available
-            if result.get("stats", {}).get("total_pois_saved", 0) > 0:
-                self.stdout.write("\nPartial results:")
+        stats = result["statistics"]
+        self.stdout.write("")
+        self.stdout.write("Statistics:")
+        self.stdout.write(f"  Categories processed: {stats['categories']}")
+        self.stdout.write(f"  Elements fetched:     {stats['elements']:,}")
+        self.stdout.write(f"  POIs created:         {stats['pois_created']:,}")
+        self.stdout.write(f"  POIs saved:           {stats['pois_saved']:,}")
+        self.stdout.write(f"  Duration:             {result['duration']:.1f}s")
+
+        # Database summary
+        db_summary = DatabaseOperations.get_database_summary()
+        self.stdout.write("")
+        self.stdout.write("Database:")
+        self.stdout.write(f"  Total POIs:          {db_summary['total']:,}")
+
+        if db_summary["categories"]:
+            self.stdout.write("")
+            self.stdout.write("Category breakdown:")
+            for category in db_summary["categories"]:
+                percent = (
+                    (category["count"] / db_summary["total"] * 100)
+                    if db_summary["total"] > 0
+                    else 0
+                )
                 self.stdout.write(
-                    f"  POIs saved: {result['stats']['total_pois_saved']:,}"
+                    f"  {category['category']:20} {category['count']:6,}"
+                    f" ({percent:.1f}%)"
+                )
+
+        errors = [r for r in result["results"] if not r.get("success")]
+        if errors:
+            self.stdout.write("")
+            self.stdout.write("Errors:")
+            for error in errors:
+                self.stdout.write(
+                    f"  - {error['category']}: {error.get('error', 'Unknown error')}"
                 )
 
         self.stdout.write("=" * 60)

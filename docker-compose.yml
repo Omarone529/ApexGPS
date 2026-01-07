@@ -40,8 +40,11 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       DJANGO_SETTINGS_MODULE: apexgps.settings
       OSM_URL: ${OSM_URL}
-        - LOCAL_PATH1=${LOCAL_PATH1}
-        - LOCAL_PATH2=${LOCAL_PATH2}
+      OSM_URL_KUMI: ${OSM_URL_KUMI}
+      OSM_URL_NCHC: ${OSM_URL_NCHC}
+      OSM_URL_CH: ${OSM_URL_CH}
+      LOCAL_PATH1: ${LOCAL_PATH1}
+      LOCAL_PATH2: ${LOCAL_PATH2}
       INIT_AREA: ${INIT_AREA}
 
 volumes:
