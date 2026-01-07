@@ -30,18 +30,21 @@ class MetricsCalculator:
             cursor.execute(
                 """
                 UPDATE gis_data_roadsegment
-                SET curvature = CASE
-                    WHEN ST_Length(geometry::geography) > 0
-                    THEN ST_Length(geometry::geography) /
-                         NULLIF(
-                             ST_Distance(
-                                 ST_StartPoint(geometry)::geography,
-                                 ST_EndPoint(geometry)::geography
-                             ),
-                             0
-                         )
-                    ELSE 1.0
-                END
+                SET curvature = COALESCE(
+                    CASE
+                        WHEN ST_Length(geometry::geography) > 0
+                        THEN ST_Length(geometry::geography) /
+                             NULLIF(
+                                 ST_Distance(
+                                     ST_StartPoint(geometry)::geography,
+                                     ST_EndPoint(geometry)::geography
+                                 ),
+                                 0
+                             )
+                        ELSE 1.0
+                    END,
+                    1.0  -- Default value when NULL
+                )
                 WHERE geometry IS NOT NULL
             """
             )
