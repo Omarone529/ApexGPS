@@ -263,14 +263,14 @@ class POIImportManager:
     def run_import(self, force: bool) -> bool:
         """Run POI import."""
         try:
+            # FIXED: Removed --limit 50, using same categories as other setup files
             args = [
                 "import_osm_pois",
                 "--area",
                 self.area,
                 "--categories",
-                "viewpoint",
-                "--limit",
-                "50",
+                "viewpoint,restaurant,church,historic",  # Consistent with other setup
+                "--verbose",
             ]
             if force:
                 args.append("--clear")
@@ -432,25 +432,24 @@ class SetupPipeline:
         result = {"success": False, "stats": self.stats.copy()}
 
         try:
-            # Step 1: Check initial status
+            # Check initial status
             self.check_initial_status()
 
-            # Step 2: Import roads
+            # Import roads
             if not self.run_road_import():
                 return result
 
-            # Step 3: Import POIs (if not skipped)
+            # Import POIs (if not skipped)
             if not self.skip_pois and not self.run_poi_import():
                 return result
 
-            # Step 4: Prepare GIS data
+            # Prepare GIS data
             if not self.run_gis_preparation():
                 return result
 
-            # Step 5: Check final status
+            # Check final status
             self.check_final_status()
 
-            # All steps completed successfully
             result["success"] = True
             result["stats"] = self.stats.copy()
 
@@ -515,11 +514,11 @@ class Command(BaseCommand):
             self.stdout.write(f"📊 Road segments: {status['road_count']:,}")
 
         if "poi_count" in status:
-            self.stdout.write(f"📍 POIs: {status['poi_count']:,}")
+            self.stdout.write(f"POIs: {status['poi_count']:,}")
 
         if "scenic_costs_calculated" in status:
             self.stdout.write(
-                f"🎨 Scenic costs calculated: {status['scenic_costs_calculated']:,}"
+                f"Scenic costs calculated: {status['scenic_costs_calculated']:,}"
             )
 
         if "next_action" in status:
@@ -537,7 +536,7 @@ class Command(BaseCommand):
 
         if result["success"]:
             self.stdout.write(
-                self.style.SUCCESS("✓ Database setup completed successfully!")
+                self.style.SUCCESS("Database setup completed successfully!")
             )
 
             # Display completed steps
@@ -546,7 +545,7 @@ class Command(BaseCommand):
                     f"\nSteps completed ({len(stats['steps_completed'])}):"
                 )
                 for step in stats["steps_completed"]:
-                    self.stdout.write(f"  ✓ {step}")
+                    self.stdout.write(f"{step}")
 
             # Display final status
             if stats["final_status"]:
@@ -555,14 +554,14 @@ class Command(BaseCommand):
                 self.stdout.write(f"{final['message']}")
 
                 if "road_count" in final:
-                    self.stdout.write(f"🛣️  Road segments: {final['road_count']:,}")
+                    self.stdout.write(f"Road segments: {final['road_count']:,}")
 
                 if "poi_count" in final:
-                    self.stdout.write(f"📍 POIs: {final['poi_count']:,}")
+                    self.stdout.write(f"POIs: {final['poi_count']:,}")
 
                 if "scenic_costs_calculated" in final:
                     self.stdout.write(
-                        f"🎨 Scenic costs: {final['scenic_costs_calculated']:,}"
+                        f"Scenic costs: {final['scenic_costs_calculated']:,}"
                     )
 
         else:
