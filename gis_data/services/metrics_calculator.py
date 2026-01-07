@@ -33,9 +33,12 @@ class MetricsCalculator:
                 SET curvature = CASE
                     WHEN ST_Length(geometry::geography) > 0
                     THEN ST_Length(geometry::geography) /
-                         ST_Distance(
-                             ST_StartPoint(geometry),
-                             ST_EndPoint(geometry)::geography
+                         NULLIF(
+                             ST_Distance(
+                                 ST_StartPoint(geometry)::geography,
+                                 ST_EndPoint(geometry)::geography
+                             ),
+                             0
                          )
                     ELSE 1.0
                 END
