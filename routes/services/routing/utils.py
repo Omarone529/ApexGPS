@@ -11,10 +11,15 @@ __all__ = [
     "_find_nearest_vertex",
     "_get_road_segment_by_id",
     "_get_road_segment_by_vertices",
+    "_row_to_segment_dict",
     "_calculate_path_metrics",
     "_encode_linestring_to_polyline",
     "_extract_coordinates_from_wkt",
     "_create_linestring_from_coords",
+    "_execute_dijkstra_query",
+    "_extract_edges_from_dijkstra_result",
+    "_get_segments_by_ids",
+    "_create_route_geometry",
 ]
 
 
