@@ -40,19 +40,52 @@ class Route(models.Model):
         verbose_name="Visibilità",
     )
 
-    # Geographic data
-    start_location = gis_models.PointField(verbose_name="Punto di partenza")
-    end_location = gis_models.PointField(verbose_name="Punto di arrivo")
+    start_location = gis_models.PointField(
+        verbose_name="Punto di partenza",
+        null=True,
+        blank=True,
+        help_text="Punto di partenza del percorso",
+    )
+    end_location = gis_models.PointField(
+        verbose_name="Punto di arrivo",
+        null=True,
+        blank=True,
+        help_text="Punto di arrivo del percorso",
+    )
     preference = models.CharField(
-        max_length=20, choices=PREFERENCE_CHOICES, verbose_name="Preferenza"
+        max_length=20,
+        choices=PREFERENCE_CHOICES,
+        default="balanced",
+        verbose_name="Preferenza",
     )
 
-    # Calculation results
-    polyline = models.TextField(verbose_name="Polilinea codificata")
-    distance_km = models.FloatField(verbose_name="Distanza (km)")
-    estimated_time_min = models.IntegerField(verbose_name="Tempo stimato (minuti)")
+    # auto-calculated
+    polyline = models.TextField(
+        verbose_name="Polilinea codificata",
+        null=True,
+        blank=True,
+        help_text="Rappresentazione codificata del percorso per le mappe",
+    )
+    distance_km = models.FloatField(
+        verbose_name="Distanza (km)",
+        null=True,
+        blank=True,
+        default=0.0,
+        help_text="Distanza totale del percorso in chilometri",
+    )
+    estimated_time_min = models.IntegerField(
+        verbose_name="Tempo stimato (minuti)",
+        null=True,
+        blank=True,
+        default=0,
+        help_text="Tempo di percorrenza stimato in minuti",
+    )
     total_scenic_score = models.FloatField(
-        null=True, blank=True, verbose_name="Punteggio panoramico totale"
+        null=True,
+        blank=True,
+        default=0.0,
+        verbose_name="Punteggio panoramico totale",
+        help_text="Punteggio panoramico totale del percorso",
     )
 
     # Timestamps
@@ -98,15 +131,23 @@ class Route(models.Model):
         Get all points in the route in correct order:
         [start, stop1, stop2, ..., stopN, end].
         """
-        points = [self.start_location]
+        points = []
+        if self.start_location:
+            points.append(self.start_location)
 
         # Get all stops in order
         stops = self.stops.order_by("order")
         for stop in stops:
             points.append(stop.location)
 
-        points.append(self.end_location)
+        if self.end_location:
+            points.append(self.end_location)
+
         return points
+
+    def is_ready_for_calculation(self):
+        """Check if route has enough data for route calculation."""
+        return bool(self.start_location and self.end_location)
 
 
 class Stop(models.Model):

@@ -10,8 +10,6 @@ from .models import Route, Stop
 
 logger = logging.getLogger(__name__)
 
-
-# Import routing services
 try:
     from routes.services.routing.fast_routing import FastRoutingService
     from routes.services.routing.route_validator import RouteValidator
@@ -19,10 +17,6 @@ try:
     logger.info("Successfully imported routing services from routes.services.routing")
 except ImportError as e:
     logger.error(f"Failed to import routing services: {e}")
-    logger.error("Please ensure:")
-    logger.error("1. The directory structure is: routes/services/routing/")
-    logger.error("2. The files exist: fast_routing.py, route_validator.py")
-    logger.error("3. There's an __init__.py in each directory")
     FastRoutingService = None
     RouteValidator = None
 
@@ -74,7 +68,7 @@ class RouteAdmin(GISModelAdmin):
         (
             "Calculated Metrics",
             {
-                "fields": ("distance_km", "estimated_time_min"),
+                "fields": ("distance_km", "estimated_time_min", "polyline"),
                 "classes": ("wide",),
             },
         ),
@@ -189,6 +183,14 @@ class RouteAdmin(GISModelAdmin):
 
     route_info_summary.short_description = "Route Summary"
 
+    def save_model(self, request, obj, form, change):
+        """Custom save method to handle initial route creation."""
+        # If this is a new route (not change), set the owner
+        if not change and not obj.owner_id:
+            obj.owner = request.user
+
+        super().save_model(request, obj, form, change)
+
     def get_urls(self):
         """Add custom URLs for admin actions."""
         from django.urls import path
@@ -275,6 +277,7 @@ class RouteAdmin(GISModelAdmin):
 
                 route.distance_km = fastest_route["total_distance_km"]
                 route.estimated_time_min = fastest_route["total_time_minutes"]
+                route.polyline = fastest_route.get("polyline", "")
                 route.save()
 
                 processing_time = round((time.time() - calculation_start) * 1000, 2)
@@ -340,6 +343,7 @@ class RouteAdmin(GISModelAdmin):
                 if route_result:
                     route.distance_km = route_result["total_distance_km"]
                     route.estimated_time_min = route_result["total_time_minutes"]
+                    route.polyline = route_result.get("polyline", "")
                     route.save()
                     success_count += 1
                 else:

@@ -38,7 +38,7 @@ class FastRoutingService(BaseRoutingService):
         if not start_vertex or not end_vertex:
             return None
 
-        # Dijkstra algorithm
+        # Execute Dijkstra algorithm
         dijkstra_result = _execute_dijkstra_query(
             start_vertex, end_vertex, self.get_cost_column()
         )
@@ -58,7 +58,6 @@ class FastRoutingService(BaseRoutingService):
         route_geometry = _create_route_geometry(segments)
         metrics = _calculate_path_metrics(segments)
         polyline_encoded = _encode_linestring_to_polyline(route_geometry)
-
         return {
             "route_type": "fastest",
             "preference": "fast",

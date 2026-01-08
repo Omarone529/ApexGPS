@@ -13,8 +13,10 @@ from .models import Route, Stop
 from .permissions import IsOwnerOrReadOnly
 from .serializers import (
     RouteCalculationInputSerializer,
+    RouteCreateSerializer,
     RouteGeoSerializer,
     RouteSerializer,
+    RouteUpdateSerializer,
     StopSerializer,
 )
 
@@ -35,7 +37,6 @@ class RouteViewSet(viewsets.ModelViewSet):
     based on visibility and ownership.
     """
 
-    serializer_class = RouteSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
     filter_backends = [
         DjangoFilterBackend,
@@ -46,6 +47,14 @@ class RouteViewSet(viewsets.ModelViewSet):
     search_fields = ["name", "owner__username"]
     ordering_fields = ["created_at", "distance_km", "estimated_time_min"]
     ordering = ["-created_at"]
+
+    def get_serializer_class(self):
+        """Return appropriate serializer based on action."""
+        if self.action == "create":
+            return RouteCreateSerializer
+        elif self.action in ["update", "partial_update"]:
+            return RouteUpdateSerializer
+        return RouteSerializer
 
     def get_queryset(self):
         """Get the queryset of routes based on user permissions."""
