@@ -45,7 +45,7 @@ class AreaConfig:
             "tertiary",
             "unclassified",
             "residential",
-            "service",
+            "services",
             "living_street",
             "track",
         ]

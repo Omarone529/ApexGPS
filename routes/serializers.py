@@ -4,7 +4,7 @@ from rest_framework import serializers
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
 
 from .models import Route, Stop
-from .service.routing.route_validator import RouteValidator
+from .services.routing.route_validator import RouteValidator
 
 User = get_user_model()
 

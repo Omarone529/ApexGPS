@@ -9,7 +9,7 @@ class DatabaseSetupService:
     """
     Service to check and prepare database for scenic routing operations.
 
-    This service ensures all required data is imported and processed
+    This services ensures all required data is imported and processed
     before attempting route calculations.
     """
 
