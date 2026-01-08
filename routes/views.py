@@ -7,6 +7,8 @@ from rest_framework import filters, permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from gis_data.services.topology_service import logger
+
 from .models import Route, Stop
 from .permissions import IsOwnerOrReadOnly
 from .serializers import (
@@ -116,11 +118,8 @@ class RouteViewSet(viewsets.ModelViewSet):
     )
     def calculate_fastest_route(self, request):
         """
-        WARNING: This route is NOT shown to users, only used for benchmarking.
-
-        Calculate FASTEST route between two points.
+        Calculate FASTEST route between two points using OSM data.
         This endpoint calculates the fastest route to establish a time baseline.
-        The result is used internally for time constraints on scenic routes.
         """
         start_time = time.time()
 
@@ -134,9 +133,8 @@ class RouteViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        # Validate input (simplified version without preference)
+        # Validate input
         simplified_data = request.data.copy()
-        # Remove fields not needed for fastest route
         simplified_data.pop("preference", None)
         simplified_data.pop("max_time_increase_pct", None)
         simplified_data.pop("include_fastest", None)
@@ -171,12 +169,13 @@ class RouteViewSet(viewsets.ModelViewSet):
             return Response(
                 {
                     "error": "Route validation failed",
-                    "validation": validation_result,
+                    "details": validation_result,
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:
+            # Calculate fastest route using real OSM data
             fastest_route = fast_service.calculate_fastest_route(
                 start_lat=start_lat,
                 start_lon=start_lon,
@@ -194,7 +193,7 @@ class RouteViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            # Prepare response
+            # Prepare comprehensive response
             response_data = {
                 "route_type": "fastest_benchmark",
                 "purpose": "internal_benchmark_only",
@@ -205,7 +204,15 @@ class RouteViewSet(viewsets.ModelViewSet):
                 "total_distance_m": fastest_route["total_distance_m"],
                 "total_time_seconds": fastest_route["total_time_seconds"],
                 "segment_count": fastest_route["segment_count"],
-                # For validation
+                "total_segments": fastest_route["total_segments"],
+                # Geometry
+                "polyline": fastest_route["polyline"],
+                "has_geometry": fastest_route["geometry"] is not None,
+                # Network info
+                "start_vertex": fastest_route["start_vertex"],
+                "end_vertex": fastest_route["end_vertex"],
+                "vertex_count": fastest_route["vertex_count"],
+                # Validation
                 "validation": {
                     "is_valid": validation_result["is_valid"],
                     "warnings": validation_result["warnings"],
@@ -213,16 +220,30 @@ class RouteViewSet(viewsets.ModelViewSet):
                     "end_vertex": validation_result.get("end_vertex"),
                 },
                 # Processing info
-                "processing_time_ms": (time.time() - start_time) * 1000,
-                "database_status": "real_data",
-                # Include minimal info for debugging
+                "processing_time_ms": round((time.time() - start_time) * 1000, 2),
+                "database_status": "real_osm_data",
+                # Coordinates
                 "start_coordinates": {"lat": start_lat, "lon": start_lon},
                 "end_coordinates": {"lat": end_lat, "lon": end_lon},
+                "start_point_snapped": validation_result["start_vertex"] is not None,
+                "end_point_snapped": validation_result["end_vertex"] is not None,
             }
 
             return Response(response_data, status=status.HTTP_200_OK)
 
+        except ValueError as e:
+            return Response(
+                {
+                    "error": f"Invalid input: {str(e)}",
+                    "validation": validation_result,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         except Exception as e:
+            import traceback
+
+            logger.error(f"Error calculating route: {str(e)}\n{traceback.format_exc()}")
+
             return Response(
                 {
                     "error": f"Error calculating fastest route: {str(e)}",
