@@ -4,14 +4,14 @@ from rest_framework import serializers
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
 
 from .models import Route, Stop
-from .services.routing.route_validator import RouteValidator
 
 User = get_user_model()
 
 __all__ = [
     "StopSerializer",
     "RouteSerializer",
-    "RouteValidator",
+    "RouteCreateSerializer",
+    "RouteUpdateSerializer",
     "RouteGeoSerializer",
     "RouteCalculationInputSerializer",
     "RouteCalculationResultSerializer",
@@ -68,40 +68,30 @@ class StopSerializer(serializers.ModelSerializer):
         return super().to_internal_value(data)
 
 
-class RouteSerializer(serializers.ModelSerializer):
+class RouteCreateSerializer(serializers.ModelSerializer):
     """
-    Serializer for the Route model.
-    Converts Route model instances to JSON format and vice versa,
-    handling data validation and relationships with other models.
+    Serializer for creating new routes.
+    Only name, visibility, and preference are required initially.
+    Coordinates can be added later.
     """
 
     owner_username = serializers.ReadOnlyField(source="owner.username")
-    stops = StopSerializer(many=True, read_only=True)
-    stop_count = serializers.IntegerField(source="get_stops_count", read_only=True)
 
     class Meta:
-        """Meta class for Route serializer."""
+        """Meta class for Route creation serializer."""
 
         model = Route
         fields = [
             "id",
             "name",
-            "owner",
             "owner_username",
             "visibility",
+            "preference",
             "start_location",
             "end_location",
-            "preference",
-            "polyline",
-            "distance_km",
-            "estimated_time_min",
-            "total_scenic_score",
             "created_at",
-            "updated_at",
-            "stops",
-            "stop_count",
         ]
-        read_only_fields = ["owner", "created_at", "updated_at", "stops", "stop_count"]
+        read_only_fields = ["id", "owner_username", "created_at"]
 
     def to_representation(self, instance):
         """Convert PointFields to lat/lon dicts in response."""
@@ -136,9 +126,10 @@ class RouteSerializer(serializers.ModelSerializer):
             # Alternative format
             lat = data.get("start_lat")
             lon = data.get("start_lon")
-            data["start_location"] = Point(float(lon), float(lat))
-            data.pop("start_lat")
-            data.pop("start_lon")
+            if lat is not None and lon is not None:
+                data["start_location"] = Point(float(lon), float(lat))
+                data.pop("start_lat")
+                data.pop("start_lon")
 
         # Handle end_location
         end_loc = data.get("end_location")
@@ -151,9 +142,10 @@ class RouteSerializer(serializers.ModelSerializer):
             # Alternative format
             lat = data.get("end_lat")
             lon = data.get("end_lon")
-            data["end_location"] = Point(float(lon), float(lat))
-            data.pop("end_lat")
-            data.pop("end_lon")
+            if lat is not None and lon is not None:
+                data["end_location"] = Point(float(lon), float(lat))
+                data.pop("end_lat")
+                data.pop("end_lon")
 
         return super().to_internal_value(data)
 
@@ -161,6 +153,176 @@ class RouteSerializer(serializers.ModelSerializer):
         """Create a new Route instance, automatically setting the owner."""
         validated_data["owner"] = self.context["request"].user
         return super().create(validated_data)
+
+
+class RouteUpdateSerializer(serializers.ModelSerializer):
+    """
+    Serializer for updating existing routes.
+    Allows updating coordinates and other fields after creation.
+    """
+
+    owner_username = serializers.ReadOnlyField(source="owner.username")
+    stops = StopSerializer(many=True, read_only=True)
+    stop_count = serializers.IntegerField(source="get_stops_count", read_only=True)
+
+    class Meta:
+        """Meta class for Route update serializer."""
+
+        model = Route
+        fields = [
+            "id",
+            "name",
+            "owner",
+            "owner_username",
+            "visibility",
+            "start_location",
+            "end_location",
+            "preference",
+            "polyline",
+            "distance_km",
+            "estimated_time_min",
+            "total_scenic_score",
+            "created_at",
+            "updated_at",
+            "stops",
+            "stop_count",
+        ]
+        read_only_fields = [
+            "id",
+            "owner",
+            "owner_username",
+            "created_at",
+            "updated_at",
+            "stops",
+            "stop_count",
+            "polyline",
+            "distance_km",
+            "estimated_time_min",
+            "total_scenic_score",
+        ]
+
+    def to_representation(self, instance):
+        """Convert PointFields to lat/lon dicts in response."""
+        data = super().to_representation(instance)
+
+        # Convert start_location
+        if instance.start_location:
+            data["start_location"] = {
+                "lat": instance.start_location.y,
+                "lon": instance.start_location.x,
+            }
+
+        # Convert end_location
+        if instance.end_location:
+            data["end_location"] = {
+                "lat": instance.end_location.y,
+                "lon": instance.end_location.x,
+            }
+
+        return data
+
+    def to_internal_value(self, data):
+        """Convert lat/lon dicts to Point objects when creating/updating."""
+        # Handle start_location
+        start_loc = data.get("start_location")
+        if start_loc and isinstance(start_loc, dict):
+            lat = start_loc.get("lat")
+            lon = start_loc.get("lon")
+            if lat is not None and lon is not None:
+                data["start_location"] = Point(float(lon), float(lat))
+        elif "start_lat" in data and "start_lon" in data:
+            # Alternative format
+            lat = data.get("start_lat")
+            lon = data.get("start_lon")
+            if lat is not None and lon is not None:
+                data["start_location"] = Point(float(lon), float(lat))
+                data.pop("start_lat")
+                data.pop("start_lon")
+
+        # Handle end_location
+        end_loc = data.get("end_location")
+        if end_loc and isinstance(end_loc, dict):
+            lat = end_loc.get("lat")
+            lon = end_loc.get("lon")
+            if lat is not None and lon is not None:
+                data["end_location"] = Point(float(lon), float(lat))
+        elif "end_lat" in data and "end_lon" in data:
+            # Alternative format
+            lat = data.get("end_lat")
+            lon = data.get("end_lon")
+            if lat is not None and lon is not None:
+                data["end_location"] = Point(float(lon), float(lat))
+                data.pop("end_lat")
+                data.pop("end_lon")
+
+        return super().to_internal_value(data)
+
+
+class RouteSerializer(serializers.ModelSerializer):
+    """
+    Legacy serializer - now acts as read-only for backward compatibility.
+    For new code, use RouteCreateSerializer or RouteUpdateSerializer.
+    """
+
+    owner_username = serializers.ReadOnlyField(source="owner.username")
+    stops = StopSerializer(many=True, read_only=True)
+    stop_count = serializers.IntegerField(source="get_stops_count", read_only=True)
+
+    class Meta:
+        """Meta class for Route serializer."""
+
+        model = Route
+        fields = [
+            "id",
+            "name",
+            "owner",
+            "owner_username",
+            "visibility",
+            "start_location",
+            "end_location",
+            "preference",
+            "polyline",
+            "distance_km",
+            "estimated_time_min",
+            "total_scenic_score",
+            "created_at",
+            "updated_at",
+            "stops",
+            "stop_count",
+        ]
+        read_only_fields = [
+            "id",
+            "owner",
+            "owner_username",
+            "created_at",
+            "updated_at",
+            "stops",
+            "stop_count",
+            "polyline",
+            "distance_km",
+            "estimated_time_min",
+            "total_scenic_score",
+        ]
+
+    def to_representation(self, instance):
+        """Convert PointFields to lat/lon dicts in response."""
+        data = super().to_representation(instance)
+
+        # Convert start_location
+        if instance.start_location:
+            data["start_location"] = {
+                "lat": instance.start_location.y,
+                "lon": instance.start_location.x,
+            }
+
+        # Convert end_location
+        if instance.end_location:
+            data["end_location"] = {
+                "lat": instance.end_location.y,
+                "lon": instance.end_location.x,
+            }
+
+        return data
 
 
 class RouteGeoSerializer(GeoFeatureModelSerializer):
