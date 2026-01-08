@@ -1,6 +1,11 @@
 from django.contrib.gis.geos import Point
 from django.db import connection
 
+from .utils import (
+    _find_nearest_vertex,
+    _validate_coordinates,
+)
+
 __all__ = ["RouteValidator"]
 
 
@@ -8,54 +13,9 @@ class RouteValidator:
     """Service for validating routing inputs and results."""
 
     @staticmethod
-    def validate_bounding_box(
-        min_lat: float, max_lat: float, min_lon: float, max_lon: float
-    ) -> tuple[bool, str]:
-        """Validate geographic bounding box."""
-        if min_lat >= max_lat:
-            return False, "min_lat must be less than max_lat"
-
-        if min_lon >= max_lon:
-            return False, "min_lon must be less than max_lon"
-
-        if not (-90 <= min_lat <= 90):
-            return False, f"min_lat {min_lat} out of range (-90 to 90)"
-
-        if not (-90 <= max_lat <= 90):
-            return False, f"max_lat {max_lat} out of range (-90 to 90)"
-
-        if not (-180 <= min_lon <= 180):
-            return False, f"min_lon {min_lon} out of range (-180 to 180)"
-
-        if not (-180 <= max_lon <= 180):
-            return False, f"max_lon {max_lon} out of range (-180 to 180)"
-
-        return True, ""
-
-    @staticmethod
-    def check_point_connectivity(point: Point) -> tuple[bool, int | None]:
-        """Check if a point is connected to the road network."""
-        lon, lat = point.x, point.y
-
+    def check_vertex_connectivity(vertex_id: int) -> bool:
+        """Check if a vertex has outgoing or incoming edges."""
         with connection.cursor() as cursor:
-            # Find nearest vertex
-            cursor.execute(
-                """
-                SELECT id
-                FROM gis_data_roadsegment_vertices_pgr
-                ORDER BY ST_Distance(the_geom, ST_MakePoint(%s, %s))
-                LIMIT 1
-                """,
-                [lon, lat],
-            )
-
-            result = cursor.fetchone()
-            if not result:
-                return False, None
-
-            vertex_id = result[0]
-
-            # Check if vertex has outgoing or incoming edges
             cursor.execute(
                 """
                 SELECT EXISTS (
@@ -66,9 +26,7 @@ class RouteValidator:
                 """,
                 [vertex_id, vertex_id],
             )
-
-            is_connected = cursor.fetchone()[0]
-            return is_connected, vertex_id
+            return cursor.fetchone()[0]
 
     @staticmethod
     def validate_route_distance(
@@ -85,16 +43,14 @@ class RouteValidator:
                 """,
                 [start_point.x, start_point.y, end_point.x, end_point.y],
             )
-
             straight_line_km = cursor.fetchone()[0]
 
             if straight_line_km > max_distance_km:
                 return False, (
                     f"Straight-line distance ({straight_line_km:.1f} km) "
-                    f"exceeds maximum allowed ({max_distance_km} km)"
+                    f"exceeds maximum ({max_distance_km} km)"
                 )
-
-            return True, f"Distance OK: {straight_line_km:.1f} km"
+            return True, f"Distance: {straight_line_km:.1f} km"
 
     @staticmethod
     def get_network_coverage_bounds() -> dict | None:
@@ -108,10 +64,10 @@ class RouteValidator:
                     ST_XMin(ST_Extent(the_geom)) as min_lon,
                     ST_XMax(ST_Extent(the_geom)) as max_lon
                 FROM gis_data_roadsegment_vertices_pgr
-            """
+                """
             )
-
             result = cursor.fetchone()
+
             if not result or None in result:
                 return None
 
@@ -123,8 +79,8 @@ class RouteValidator:
             }
 
     @staticmethod
-    def is_point_in_network_bounds(point: Point) -> tuple[bool, str | None]:
-        """Check if point is within road network coverage area."""
+    def is_point_in_network_bounds(point: Point) -> tuple[bool, str]:
+        """Check if point is within road network coverage."""
         bounds = RouteValidator.get_network_coverage_bounds()
         if not bounds:
             return False, "Cannot determine network bounds"
@@ -133,17 +89,17 @@ class RouteValidator:
 
         if not (bounds["min_lat"] <= lat <= bounds["max_lat"]):
             return False, (
-                f"Latitude {lat} is outside network bounds "
+                f"Latitude {lat} outside bounds "
                 f"({bounds['min_lat']} to {bounds['max_lat']})"
             )
 
         if not (bounds["min_lon"] <= lon <= bounds["max_lon"]):
             return False, (
-                f"Longitude {lon} is outside network bounds "
+                f"Longitude {lon} outside bounds "
                 f"({bounds['min_lon']} to {bounds['max_lon']})"
             )
 
-        return True, "Point is within network bounds"
+        return True, "Within network bounds"
 
     def full_route_validation(
         self,
@@ -162,14 +118,11 @@ class RouteValidator:
             "end_vertex": None,
         }
 
-        # Basic coordinate validation
-        from .base_routing import BaseRoutingService
-
         for coord_name, lat, lon in [
             ("start", start_lat, start_lon),
             ("end", end_lat, end_lon),
         ]:
-            is_valid, error_msg = BaseRoutingService.validate_coordinates(lat, lon)
+            is_valid, error_msg = _validate_coordinates(lat, lon)
             if not is_valid:
                 results["errors"].append(f"{coord_name}: {error_msg}")
 
@@ -183,24 +136,30 @@ class RouteValidator:
         # Check network bounds
         in_bounds, bounds_msg = self.is_point_in_network_bounds(start_point)
         if not in_bounds:
-            results["warnings"].append(f"Start point: {bounds_msg}")
+            results["warnings"].append(f"Start: {bounds_msg}")
 
         in_bounds, bounds_msg = self.is_point_in_network_bounds(end_point)
         if not in_bounds:
-            results["warnings"].append(f"End point: {bounds_msg}")
+            results["warnings"].append(f"End: {bounds_msg}")
 
-        # Check connectivity
-        start_connected, start_vertex = self.check_point_connectivity(start_point)
-        end_connected, end_vertex = self.check_point_connectivity(end_point)
-
-        if not start_connected:
-            results["errors"].append("Start point is not connected to road network")
-
-        if not end_connected:
-            results["errors"].append("End point is not connected to road network")
+        # Find vertices and check connectivity
+        start_vertex = _find_nearest_vertex(start_point)
+        end_vertex = _find_nearest_vertex(end_point)
 
         results["start_vertex"] = start_vertex
         results["end_vertex"] = end_vertex
+
+        if start_vertex:
+            if not self.check_vertex_connectivity(start_vertex):
+                results["errors"].append("Start point not connected to road network")
+        else:
+            results["errors"].append("Cannot find start point on road network")
+
+        if end_vertex:
+            if not self.check_vertex_connectivity(end_vertex):
+                results["errors"].append("End point not connected to road network")
+        else:
+            results["errors"].append("Cannot find end point on road network")
 
         # Validate distance
         distance_valid, distance_msg = self.validate_route_distance(
