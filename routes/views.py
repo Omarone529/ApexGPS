@@ -8,6 +8,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from gis_data.services.topology_service import logger
+from routes.services.routing.utils import _prepare_route_response
 
 from .models import Route, Stop
 from .permissions import IsOwnerOrReadOnly
@@ -19,6 +20,7 @@ from .serializers import (
     RouteUpdateSerializer,
     StopSerializer,
 )
+from .services.routing.route_recalculation import RouteRecalculationService
 
 try:
     from routes.services.routing.fast_routing import FastRoutingService
@@ -142,14 +144,14 @@ class RouteViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        # Validate input - ora accetta solo nomi di località
+        # Validate input
         input_serializer = RouteCalculationInputSerializer(data=request.data)
         if not input_serializer.is_valid():
             return Response(input_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         validated_data = input_serializer.validated_data
 
-        # Extract parameters - ora abbiamo già le coordinate geocodificate
+        # Extract parameters
         start_lat = validated_data["start_lat"]
         start_lon = validated_data["start_lon"]
         end_lat = validated_data["end_lat"]
@@ -201,48 +203,30 @@ class RouteViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            # Prepare comprehensive response
-            response_data = {
-                "route_type": "fastest",
-                "purpose": "baseline_for_scenic_routes",
-                # Location names
-                "start_location": start_location_name,
-                "end_location": end_location_name,
-                # Coordinates
-                "start_coordinates": {"lat": start_lat, "lon": start_lon},
-                "end_coordinates": {"lat": end_lat, "lon": end_lon},
-                # Route metrics
-                "total_distance_km": fastest_route["total_distance_km"],
-                "total_time_minutes": fastest_route["total_time_minutes"],
-                "total_distance_m": fastest_route["total_distance_m"],
-                "total_time_seconds": fastest_route["total_time_seconds"],
-                "segment_count": fastest_route["segment_count"],
-                "total_segments": fastest_route["total_segments"],
-                # Geometry
-                "polyline": fastest_route["polyline"],
-                "has_geometry": fastest_route["geometry"] is not None,
-                # Network info
-                "start_vertex": fastest_route["start_vertex"],
-                "end_vertex": fastest_route["end_vertex"],
-                "vertex_count": fastest_route["vertex_count"],
-                # Validation
-                "validation": {
-                    "is_valid": validation_result["is_valid"],
-                    "warnings": validation_result["warnings"],
-                    "start_vertex": validation_result.get("start_vertex"),
-                    "end_vertex": validation_result.get("end_vertex"),
-                },
-                # Processing info
-                "processing_time_ms": round((time.time() - start_time) * 1000, 2),
-                "database_status": "real_osm_data",
-                # Geocoding info
-                "geocoding_status": {
-                    "start_geocoded": True,
-                    "end_geocoded": True,
-                    "start_original_name": start_location_name,
-                    "end_original_name": end_location_name,
-                },
+            start_data = {
+                "name": start_location_name,
+                "lat": start_lat,
+                "lon": start_lon,
+                "geocoded": True,
+                "original_name": start_location_name,
             }
+
+            end_data = {
+                "name": end_location_name,
+                "lat": end_lat,
+                "lon": end_lon,
+                "geocoded": True,
+                "original_name": end_location_name,
+            }
+
+            processing_time = time.time() - start_time
+            response_data = _prepare_route_response(
+                fastest_route=fastest_route,
+                start_data=start_data,
+                end_data=end_data,
+                validation_result=validation_result,
+                processing_time=processing_time,
+            )
 
             return Response(response_data, status=status.HTTP_200_OK)
 
@@ -267,10 +251,9 @@ class RouteViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-    # stop managment actions
     @action(detail=True, methods=["post"], permission_classes=[IsOwnerOrReadOnly])
     def add_stop(self, request, pk=None):
-        """Add a stop to a route."""
+        """Add a stop to a route and recalculate the route."""
         route = self.get_object()
 
         # Check if user can add stops to this route
@@ -308,12 +291,26 @@ class RouteViewSet(viewsets.ModelViewSet):
         serializer = StopSerializer(data=stop_data, context={"request": request})
 
         if serializer.is_valid():
-            # TODO: Trigger route recalculation here
-            # stop = serializer.save()
-            # recalculate_route_with_stops(route.id)
+            serializer.save()
+            # Trigger route recalculation
+            recalculation_result = (
+                RouteRecalculationService.recalculate_route_with_stops(route.id)
+            )
 
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            # Refresh route data after recalculation
+            route.refresh_from_db()
 
+            # Get updated route data
+            route_serializer = self.get_serializer(route)
+            response_data = {
+                "stop": serializer.data,
+                "route_updated": route_serializer.data,
+                "recalculation_success": recalculation_result,
+                "message": "Stop added successfully"
+                + (" and route recalculated" if recalculation_result else ""),
+            }
+
+            return Response(response_data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=["get"])
@@ -326,7 +323,7 @@ class RouteViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"], permission_classes=[IsOwnerOrReadOnly])
     def reorder_stops(self, request, pk=None):
-        """Reorder stops for a route."""
+        """Reorder stops for a route and recalculate."""
         route = self.get_object()
 
         if route.owner != request.user and not request.user.is_staff:
@@ -354,14 +351,25 @@ class RouteViewSet(viewsets.ModelViewSet):
         for order_position, stop_id in enumerate(new_order, start=1):
             Stop.objects.filter(id=stop_id, route=route).update(order=order_position)
 
-        # TODO: Trigger route recalculation
-        # recalculate_route_with_stops(route.id)
+        # Trigger route recalculation
+        recalculation_result = RouteRecalculationService.recalculate_route_with_stops(
+            route.id
+        )
+        route.refresh_from_db()
 
-        return Response({"message": "Stops reordered successfully."})
+        # Get updated route data
+        route_serializer = self.get_serializer(route)
+        response_data = {
+            "message": "Stops reordered successfully.",
+            "route_updated": route_serializer.data,
+            "recalculation_success": recalculation_result,
+        }
+
+        return Response(response_data)
 
     @action(detail=True, methods=["delete"], permission_classes=[IsOwnerOrReadOnly])
     def clear_stops(self, request, pk=None):
-        """Remove all stops from a route."""
+        """Remove all stops from a route and recalculate."""
         route = self.get_object()
 
         if route.owner != request.user and not request.user.is_staff:
@@ -370,12 +378,67 @@ class RouteViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        # Get count before deletion
+        stop_count = route.stops.count()
+
+        # Delete all stops
         route.stops.all().delete()
 
-        # TODO: Trigger route recalculation
-        # recalculate_route_with_stops(route.id)
+        # Trigger route recalculation
+        recalculation_result = RouteRecalculationService.recalculate_route_with_stops(
+            route.id
+        )
+        route.refresh_from_db()
 
-        return Response({"message": "All stops cleared successfully."})
+        # Get updated route data
+        route_serializer = self.get_serializer(route)
+        response_data = {
+            "message": f"All stops ({stop_count}) cleared successfully.",
+            "route_updated": route_serializer.data,
+            "recalculation_success": recalculation_result,
+        }
+
+        return Response(response_data)
+
+    @action(detail=True, methods=["post"], permission_classes=[IsOwnerOrReadOnly])
+    def recalculate(self, request, pk=None):
+        """
+        Manually trigger route recalculation.
+        Useful when route needs to be updated without modifying stops.
+        """
+        route = self.get_object()
+
+        if route.owner != request.user and not request.user.is_staff:
+            return Response(
+                {"error": "Only the route owner can recalculate the route."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Get detailed recalculation info
+        recalculation_info = RouteRecalculationService.get_detailed_recalculation(
+            route.id
+        )
+
+        if recalculation_info.get("success"):
+            # Refresh route data
+            route.refresh_from_db()
+            route_serializer = self.get_serializer(route)
+
+            return Response(
+                {
+                    "message": "Route recalculated successfully",
+                    "recalculation_details": recalculation_info,
+                    "route_updated": route_serializer.data,
+                }
+            )
+        else:
+            return Response(
+                {
+                    "error": "Route recalculation failed",
+                    "details": recalculation_info,
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 class StopViewSet(viewsets.ModelViewSet):
@@ -427,8 +490,8 @@ class StopViewSet(viewsets.ModelViewSet):
 
         serializer.save()
 
-        # TODO: Trigger route recalculation
-        # recalculate_route_with_stops(route.id)
+        # Trigger route recalculation
+        RouteRecalculationService.recalculate_route_with_stops(route.id)
 
     def perform_update(self, serializer):
         """Update stop and trigger route recalculation."""
@@ -442,8 +505,8 @@ class StopViewSet(viewsets.ModelViewSet):
 
         serializer.save()
 
-        # TODO: Trigger route recalculation
-        # recalculate_route_with_stops(route.id)
+        # Trigger route recalculation
+        RouteRecalculationService.recalculate_route_with_stops(route.id)
 
     def perform_destroy(self, instance):
         """Delete stop and trigger route recalculation."""
@@ -455,8 +518,8 @@ class StopViewSet(viewsets.ModelViewSet):
 
             raise PermissionDenied("You can only delete stops from your own routes.")
 
+        route_id = route.id
         instance.delete()
 
-        # TODO: Trigger route recalculation
-        # route_id = instance.route.id
-        # recalculate_route_with_stops(route_id)
+        # Trigger route recalculation
+        RouteRecalculationService.recalculate_route_with_stops(route_id)
