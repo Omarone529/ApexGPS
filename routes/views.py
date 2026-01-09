@@ -13,10 +13,9 @@ from routes.services.routing.utils import _prepare_route_response
 from .models import Route, Stop
 from .permissions import IsOwnerOrReadOnly
 from .serializers import (
-    RouteCoordinatesInputSerializer,
+    RouteCalculationInputSerializer,
     RouteCreateSerializer,
     RouteGeoSerializer,
-    RouteLocationNamesInputSerializer,
     RouteSerializer,
     RouteUpdateSerializer,
     StopSerializer,
@@ -129,7 +128,10 @@ class RouteViewSet(viewsets.ModelViewSet):
         url_path="calculate-fastest",
     )
     def calculate_fastest_route(self, request):
-        """Calculate fastest route between two locations."""
+        """
+        Calculate fastest route between two locations.
+        Accepts location names which are automatically geocoded.
+        """
         start_time = time.time()
 
         # Check if routing services are available
@@ -142,28 +144,8 @@ class RouteViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        # Try direct coordinates first (preferred method)
-        if all(
-            key in request.data
-            for key in ["start_lat", "start_lon", "end_lat", "end_lon"]
-        ):
-            input_serializer = RouteCoordinatesInputSerializer(data=request.data)
-        # Fall back to location names (legacy support)
-        elif all(
-            key in request.data for key in ["start_location_name", "end_location_name"]
-        ):
-            input_serializer = RouteLocationNamesInputSerializer(data=request.data)
-        else:
-            return Response(
-                {
-                    "error": "Provide either direct coordinates"
-                    " (start_lat, start_lon, end_lat, end_lon) "
-                    "or location names (start_location_name, end_location_name)"
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         # Validate input
+        input_serializer = RouteCalculationInputSerializer(data=request.data)
         if not input_serializer.is_valid():
             return Response(input_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -175,14 +157,8 @@ class RouteViewSet(viewsets.ModelViewSet):
         end_lat = validated_data["end_lat"]
         end_lon = validated_data["end_lon"]
         vertex_threshold = validated_data.get("vertex_threshold", 0.01)
-
-        # Get location names (either from input or generated from coordinates)
-        start_location_name = validated_data.get(
-            "start_location_name", f"{start_lat:.4f}, {start_lon:.4f}"
-        )
-        end_location_name = validated_data.get(
-            "end_location_name", f"{end_lat:.4f}, {end_lon:.4f}"
-        )
+        start_location_name = validated_data["start_location_name"]
+        end_location_name = validated_data["end_location_name"]
 
         # Initialize services
         fast_service = FastRoutingService()
