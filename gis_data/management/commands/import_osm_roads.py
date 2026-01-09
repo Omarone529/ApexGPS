@@ -127,8 +127,10 @@ class OSMQueryBuilder:
         highway_types = AreaConfig.get_highway_types()
         highway_filter = "|".join(highway_types)
 
+        timeout = 1800 if area_name_norm == "italy" else 900
+
         return f"""
-            [out:json][timeout:900];
+            [out:json][timeout:{timeout}];
             area({area_id})->.searchArea;
             (
                 way["highway"]["highway"~"^{highway_filter}$"](area.searchArea);
@@ -150,7 +152,7 @@ class OSMAPIClient:
         """Fetch road data from OSM for given area."""
         try:
             query = OSMQueryBuilder.build_roads_query(area_name)
-            logger.info(f"Query built ({len(query)} chars)")
+            logger.info(f"Query built ({len(query)} chars) for area: {area_name}")
         except ValueError as e:
             logger.error(f"Query building failed: {e}")
             return None
@@ -166,7 +168,7 @@ class OSMAPIClient:
                 response = requests.post(
                     self.url,
                     data={"data": query},
-                    timeout=300,
+                    timeout=600,
                     headers={"User-Agent": "ApexGPS/1.0"},
                 )
                 response.raise_for_status()
@@ -500,8 +502,8 @@ class Command(BaseCommand):
         parser.add_argument(
             "--area",
             type=str,
-            default="test",
-            help="Area to import (test, lazio, italy, etc.)",
+            default="italy",
+            help="Area to import (italy, test, lazio, etc.)",
         )
         parser.add_argument(
             "--clear", action="store_true", help="Clear existing roads before import"
@@ -546,7 +548,7 @@ class Command(BaseCommand):
         areas_list = sorted(area_ids.keys())
         for i in range(0, len(areas_list), 4):
             line_areas = areas_list[i : i + 4]
-            self.stdout.write("  " + "  ".join(f"{area:20}" for area in line_areas))
+            self.stdout.write("  " + " ".join(f"{area:20}" for area in line_areas))
 
     def display_results(self, result: dict):
         """Display import results."""
