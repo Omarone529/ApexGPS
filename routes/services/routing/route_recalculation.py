@@ -2,13 +2,13 @@ import logging
 from typing import Any
 
 from routes.models import Route
-from routes.serializers import RouteCalculationResponseSerializer
 from routes.services.routing.fast_routing import FastRoutingService
+from routes.services.routing.utils import _calculate_route_segments
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "RouteCalculationResponseSerializer",
+    "RouteRecalculationService",
 ]
 
 
@@ -28,41 +28,24 @@ class RouteRecalculationService:
                 logger.warning(f"Route {route_id} has less than 2 points, skipping")
                 return False
 
-            # Initialize routing service
+            # Calculate route through all points using utility function
             routing_service = FastRoutingService()
+            route_result = _calculate_route_segments(routing_service, all_points)
 
-            # Calculate route through all points
-            total_distance_km = 0
-            total_time_minutes = 0
-
-            # Calculate route between consecutive points
-            for i in range(len(all_points) - 1):
-                start_point = all_points[i]
-                end_point = all_points[i + 1]
-
-                segment_result = routing_service.calculate_route(
-                    start_point=start_point,
-                    end_point=end_point,
-                    vertex_threshold=0.01,
-                )
-
-                if not segment_result:
-                    logger.error(
-                        f"Cannot calculate route segment {i} for route {route_id}"
-                    )
-                    return False
-
-                total_distance_km += segment_result.get("total_distance_km", 0)
-                total_time_minutes += segment_result.get("total_time_minutes", 0)
+            if not route_result.get("success") or not route_result.get(
+                "all_segments_valid", False
+            ):
+                logger.error(f"Cannot calculate complete route for route {route_id}")
+                return False
 
             # Update route with new values
-            route.distance_km = round(total_distance_km, 2)
-            route.estimated_time_min = round(total_time_minutes, 1)
+            route.distance_km = round(route_result["total_distance_km"], 2)
+            route.estimated_time_min = round(route_result["total_time_minutes"], 1)
             route.save()
 
             logger.info(
-                f"Recalculated route {route_id}: {total_distance_km:.2f} km, "
-                f"{total_time_minutes:.1f} min"
+                f"Recalculated route {route_id}: {route.distance_km:.2f} km, "
+                f"{route.estimated_time_min:.1f} min"
             )
             return True
 
@@ -75,7 +58,7 @@ class RouteRecalculationService:
 
     @staticmethod
     def get_detailed_recalculation(route_id: int) -> dict[str, Any]:
-        """Get detailed recalculation information."""
+        """Get detailed recalculation information for debugging."""
         try:
             route = Route.objects.get(id=route_id)
             all_points = route.get_all_points_in_order()
@@ -88,63 +71,45 @@ class RouteRecalculationService:
                 }
 
             routing_service = FastRoutingService()
+            route_result = _calculate_route_segments(routing_service, all_points)
+
+            if not route_result.get("success"):
+                return {
+                    "success": False,
+                    "error": "Route calculation failed",
+                    "route_id": route_id,
+                    "details": route_result,
+                }
+
+            # Format segment names
             segments_info = []
-
-            for i in range(len(all_points) - 1):
-                start_point = all_points[i]
-                end_point = all_points[i + 1]
-
+            for i, segment in enumerate(route_result.get("segments", [])):
                 segment_name = f"Segment {i}"
                 if i == 0:
                     segment_name = "Start to first stop"
                 elif i == len(all_points) - 2:
-                    segment_name = f"Stop {i} to end"
+                    segment_name = f"Stop {i - 1} to end"
                 elif i > 0:
-                    segment_name = f"Stop {i} to stop {i + 1}"
+                    segment_name = f"Stop {i - 1} to stop {i}"
 
-                segment_result = routing_service.calculate_route(
-                    start_point=start_point, end_point=end_point
+                segments_info.append(
+                    {
+                        "name": segment_name,
+                        "distance_km": segment.get("distance_km", 0),
+                        "time_minutes": segment.get("time_minutes", 0),
+                        "has_route": segment.get("success", False),
+                    }
                 )
-
-                if segment_result:
-                    segments_info.append(
-                        {
-                            "name": segment_name,
-                            "distance_km": segment_result.get("total_distance_km", 0),
-                            "time_minutes": segment_result.get("total_time_minutes", 0),
-                            "has_route": True,
-                        }
-                    )
-                else:
-                    segments_info.append(
-                        {
-                            "name": segment_name,
-                            "distance_km": 0,
-                            "time_minutes": 0,
-                            "has_route": False,
-                            "error": f"No route found from point {i} to {i + 1}",
-                        }
-                    )
-
-            # Calculate totals
-            total_distance = round(
-                sum(seg.get("distance_km", 0) for seg in segments_info), 2
-            )
-            total_time = round(
-                sum(seg.get("time_minutes", 0) for seg in segments_info), 1
-            )
 
             return {
                 "success": True,
                 "route_id": route_id,
                 "route_name": route.name,
-                "total_distance_km": total_distance,
-                "total_time_minutes": total_time,
-                "segment_count": len(segments_info),
+                "total_distance_km": round(route_result["total_distance_km"], 2),
+                "total_time_minutes": round(route_result["total_time_minutes"], 1),
+                "segment_count": route_result["segment_count"],
                 "segments": segments_info,
-                "all_points_valid": all(
-                    seg.get("has_route", False) for seg in segments_info
-                ),
+                "all_points_valid": route_result["all_segments_valid"],
             }
 
         except Exception as e:
