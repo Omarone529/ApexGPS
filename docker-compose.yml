@@ -46,5 +46,6 @@ services:
       LOCAL_PATH1: ${LOCAL_PATH1}
       LOCAL_PATH2: ${LOCAL_PATH2}
       INIT_AREA: ${INIT_AREA}
+      NOMINATIM_URL: ${NOMINATIM_URL}
 volumes:
   pgdata:
