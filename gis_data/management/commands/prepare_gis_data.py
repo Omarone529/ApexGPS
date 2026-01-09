@@ -113,6 +113,13 @@ class RoadDataValidator:
             logger.warning("No road segments found in database")
             return True
 
+        # Consider empty if less than minimum for Italy
+        if count < 1000:
+            logger.warning(
+                f"Only {count:,} road segments found. Expected > 100,000 for Italy."
+            )
+            return True
+
         logger.info(f"Found {count} road segments")
         return False
 
