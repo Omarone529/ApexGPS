@@ -373,8 +373,25 @@ class RouteCalculationInputSerializer(serializers.Serializer):
                 {"error": "Geocoding service not available"}
             ) from e
 
+        start_location_name = data["start_location_name"].strip()
+        end_location_name = data["end_location_name"].strip()
+
+        if start_location_name.startswith('"') and start_location_name.endswith('"'):
+            start_location_name = start_location_name[1:-1]
+        if end_location_name.startswith('"') and end_location_name.endswith('"'):
+            end_location_name = end_location_name[1:-1]
+
+        if not any(
+            word in start_location_name.lower() for word in ["italia", "italy", "it"]
+        ):
+            start_location_name = f"{start_location_name}, Italia"
+
+        if not any(
+            word in end_location_name.lower() for word in ["italia", "italy", "it"]
+        ):
+            end_location_name = f"{end_location_name}, Italia"
+
         # Geocode start location
-        start_location_name = data["start_location_name"]
         start_point = GeocodingService.geocode_location(start_location_name)
 
         if not start_point:
@@ -388,9 +405,9 @@ class RouteCalculationInputSerializer(serializers.Serializer):
         data["start_lat"] = start_point.y
         data["start_lon"] = start_point.x
         data["geocoded_start"] = True
+        data["start_location_name"] = start_location_name
 
         # Geocode end location
-        end_location_name = data["end_location_name"]
         end_point = GeocodingService.geocode_location(end_location_name)
 
         if not end_point:
@@ -404,6 +421,7 @@ class RouteCalculationInputSerializer(serializers.Serializer):
         data["end_lat"] = end_point.y
         data["end_lon"] = end_point.x
         data["geocoded_end"] = True
+        data["end_location_name"] = end_location_name
 
         # Italy bounds check
         ITALY_BOUNDS = {
