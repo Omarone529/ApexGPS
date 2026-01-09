@@ -349,8 +349,11 @@ class CategoryImportExecutor:
         """Execute import for this category."""
         logger.info(f"Importing {self.category} for {self.area_name}")
 
-        # Simplified bbox - should come from configuration
-        bbox = "41.89,12.47,41.91,12.49"
+        if self.area_name == "italy":
+            bbox = "35.5,6.6,47.1,18.5"
+        else:
+            # Per area test (Roma)
+            bbox = "41.89,12.47,41.91,12.49"
 
         # Build query
         query = QueryConstructor.build_query(self.category, bbox)
@@ -451,7 +454,7 @@ class Command(BaseCommand):
         """Adds arguments required for the command."""
         parser.add_argument(
             "--area",
-            default="test",
+            default="italy",
             help="Area name for import",
         )
         parser.add_argument(
