@@ -129,7 +129,7 @@ class RouteViewSet(viewsets.ModelViewSet):
     )
     def calculate_fastest_route(self, request):
         """
-        Calculate FASTEST route between two locations.
+        Calculate fastest route between two locations.
         Accepts location names which are automatically geocoded.
         """
         start_time = time.time()
@@ -157,8 +157,6 @@ class RouteViewSet(viewsets.ModelViewSet):
         end_lat = validated_data["end_lat"]
         end_lon = validated_data["end_lon"]
         vertex_threshold = validated_data.get("vertex_threshold", 0.01)
-
-        # Nomi originali delle località
         start_location_name = validated_data["start_location_name"]
         end_location_name = validated_data["end_location_name"]
 
