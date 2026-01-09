@@ -114,7 +114,7 @@ class DatabaseStatusChecker:
                     "message": "No road segments found in database.",
                     "road_count": 0,
                     "next_action": "Import roads: python manage.py "
-                    "import_osm_roads --area test",
+                    "import_osm_roads --area italy",
                 }
             )
             return status
@@ -127,7 +127,7 @@ class DatabaseStatusChecker:
                     "message": "Roads exist but topology not created.",
                     "road_count": road_count,
                     "next_action": "Prepare GIS data: python manage.py "
-                    "prepare_gis_data --area test",
+                    "prepare_gis_data --area italy",
                 }
             )
             return status
@@ -141,7 +141,7 @@ class DatabaseStatusChecker:
                     "message": "Topology exists but routing costs not calculated.",
                     "road_count": road_count,
                     "next_action": "Prepare GIS data: python manage.py "
-                    "prepare_gis_data --area test",
+                    "prepare_gis_data --area italy",
                 }
             )
             return status
@@ -155,7 +155,7 @@ class DatabaseStatusChecker:
                     "road_count": road_count,
                     "scenic_costs_calculated": scenic_cost_count,
                     "next_action": "Import POIs: python manage.py "
-                    "import_osm_pois --area test",
+                    "import_osm_pois --area italy",
                 }
             )
             return status
@@ -169,7 +169,7 @@ class DatabaseStatusChecker:
                     "road_count": road_count,
                     "scenic_costs_calculated": scenic_cost_count,
                     "next_action": "Import POIs: python manage.py "
-                    "import_osm_pois --area test",
+                    "import_osm_pois --area italy",
                 }
             )
             return status
@@ -263,13 +263,12 @@ class POIImportManager:
     def run_import(self, force: bool) -> bool:
         """Run POI import."""
         try:
-            # FIXED: Removed --limit 50, using same categories as other setup files
             args = [
                 "import_osm_pois",
                 "--area",
                 self.area,
                 "--categories",
-                "viewpoint,restaurant,church,historic",  # Consistent with other setup
+                "viewpoint,restaurant,church,historic",
                 "--verbose",
             ]
             if force:
@@ -311,7 +310,7 @@ class GISPreparationManager:
     def run_preparation(self, force: bool) -> bool:
         """Run GIS data preparation."""
         try:
-            args = ["prepare_gis_data", "--area", self.area, "--verbose"]
+            args = ["prepare_gis_data", "--area", "italy", "--verbose"]
             if force:
                 args.append("--force")
 
@@ -479,8 +478,8 @@ class Command(BaseCommand):
         parser.add_argument(
             "--area",
             type=str,
-            default="test",
-            help="Geographic area to import (default: test)",
+            default="italy",
+            help="Geographic area to import (default: italy)",
         )
         parser.add_argument("--skip-pois", action="store_true", help="Skip POI import")
         parser.add_argument(
@@ -511,7 +510,7 @@ class Command(BaseCommand):
         self.stdout.write(f"Message: {status['message']}")
 
         if "road_count" in status:
-            self.stdout.write(f"📊 Road segments: {status['road_count']:,}")
+            self.stdout.write(f"Road segments: {status['road_count']:,}")
 
         if "poi_count" in status:
             self.stdout.write(f"POIs: {status['poi_count']:,}")
@@ -611,11 +610,12 @@ class Command(BaseCommand):
 
         # Adjust area for test mode
         area = options["area"]
-        if options["test_mode"] and area == "italy":
+        if options["test_mode"]:
             area = "test"
             self.stdout.write(
                 self.style.WARNING(
-                    f"Test mode enabled, using area: {area} instead of italy"
+                    f"Test mode enabled, using area:"
+                    f" {area} instead of {options['area']}"
                 )
             )
 
