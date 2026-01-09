@@ -23,65 +23,77 @@ __all__ = [
     "DatabaseManager",
     "ImportPipeline",
     "Command",
+    "RegionalItalyImporter",
 ]
 
 
 class AreaConfig:
     """Configuration for OSM areas."""
 
+    # Region list with OSM ID
+    ITALIAN_REGIONS = {
+        "abruzzo": 41211,
+        "basilicata": 40073,
+        "calabria": 39938,
+        "campania": 39624,
+        "emilia-romagna": 42615,
+        "friuli-venezia giulia": 44690,
+        "lazio": 41722,
+        "liguria": 45211,
+        "lombardia": 45177,
+        "marche": 41488,
+        "molise": 41356,
+        "piemonte": 44872,
+        "puglia": 41097,
+        "sardegna": 36481,
+        "sicilia": 39115,
+        "toscana": 42176,
+        "trentino-alto adige": 45687,
+        "umbria": 42306,
+        "valle d'aosta": 45217,
+        "veneto": 43630,
+    }
+
     @staticmethod
     def get_osm_url() -> str:
         """Get OSM API URL from environment with default."""
-        return os.environ.get("OSM_URL", "https://overpass-api.de/api/interpreter")
+        return os.environ.get("OSM_URL")
 
     @staticmethod
     def get_highway_types() -> list[str]:
         """Get list of highway types to import."""
         return [
             "motorway",
+            "motorway_link",
             "trunk",
+            "trunk_link",
             "primary",
+            "primary_link",
             "secondary",
+            "secondary_link",
             "tertiary",
+            "tertiary_link",
             "unclassified",
             "residential",
-            "services",
             "living_street",
+            "service",
             "track",
         ]
 
     @staticmethod
     def get_area_ids() -> dict[str, int]:
         """Get mapping of area names to OSM relation IDs."""
-        return {
-            # Italy Regions
-            "italy": 365331,
-            "abruzzo": 41211,
-            "basilicata": 40073,
-            "calabria": 39938,
-            "campania": 39624,
-            "emilia-romagna": 42615,
-            "friuli-venezia giulia": 44690,
-            "lazio": 41722,
-            "liguria": 45211,
-            "lombardia": 45177,
-            "marche": 41488,
-            "molise": 41356,
-            "piemonte": 44872,
-            "puglia": 41097,
-            "sardegna": 36481,
-            "sicilia": 39115,
-            "toscana": 42176,
-            "trentino-alto adige": 45687,
-            "umbria": 42306,
-            "valle d'aosta": 45217,
-            "veneto": 43630,
-            # Test areas
-            "test": 41722,
-            "rome": 41722,
-            "milan": 45177,
-            "florence": 42176,
-        }
+        regions = AreaConfig.ITALIAN_REGIONS.copy()
+        regions.update(
+            {
+                "italy": 365331,
+                "test": 41722,
+                "rome": 41722,
+                "milan": 45177,
+                "florence": 42176,
+            }
+        )
+        return regions
 
     @staticmethod
     def normalize_area_name(area_name: str) -> str:
@@ -109,36 +121,172 @@ class OSMQueryBuilder:
     """Builder for OSM Overpass queries."""
 
     @staticmethod
-    def build_roads_query(area_name: str) -> str:
-        """Build Overpass query for roads in given area."""
-        area_name_norm = AreaConfig.normalize_area_name(area_name)
-        area_ids = AreaConfig.get_area_ids()
-
-        if area_name_norm not in area_ids:
-            for key, value in area_ids.items():
-                if area_name_norm in key:
-                    area_id = value
-                    break
-            else:
-                raise ValueError(f"Unknown area: {area_name}")
-        else:
-            area_id = area_ids[area_name_norm]
-
-        highway_types = AreaConfig.get_highway_types()
+    def build_region_query(region_id: int, highway_types: list[str]) -> str:
+        """Build optimized query for an Italian region."""
         highway_filter = "|".join(highway_types)
 
-        timeout = 1800 if area_name_norm == "italy" else 900
-
-        return f"""
-            [out:json][timeout:{timeout}];
-            area({area_id})->.searchArea;
+        # Optimized query for italian regions
+        query = f"""
+            [out:json][timeout:300];
+            area({region_id})->.searchArea;
             (
-                way["highway"]["highway"~"^{highway_filter}$"](area.searchArea);
+                way["highway"]["highway"~"^({highway_filter})$"](area.searchArea);
             );
             (._;>;);
             out body;
-            out skel qt;
-        """
+            """
+        return query
+
+    @staticmethod
+    def build_general_query(area_id: int, highway_types: list[str]) -> str:
+        """Build general Overpass query."""
+        highway_filter = "|".join(highway_types)
+
+        return f"""
+            [out:json][timeout:180];
+            area({area_id})->.searchArea;
+            (
+                way["highway"]["highway"~"^({highway_filter})$"](area.searchArea);
+            );
+            (._;>;);
+            out body;
+            """
+
+
+class RegionalItalyImporter:
+    """Importer for Italy by regions."""
+
+    def __init__(self):
+        """Initialize the importer."""
+        self.api_client = OSMAPIClient()
+        self.data_processor = OSMDataProcessor()
+        self.total_segments = 0
+        self.total_ways = 0
+        self.region_stats = {}
+
+    def import_all_regions(self, clear_existing: bool = False) -> dict:
+        """Import all Italian regions."""
+        if clear_existing:
+            deleted = DatabaseManager.clear_existing_roads()
+            logger.info(f"Cleared {deleted} existing road segments")
+
+        successful_regions = []
+        failed_regions = []
+
+        logger.info(
+            f"Starting import of {len(AreaConfig.ITALIAN_REGIONS)} Italian regions..."
+        )
+
+        for region_name, region_id in AreaConfig.ITALIAN_REGIONS.items():
+            logger.info(f"\n{'=' * 60}")
+            logger.info(f"Importing region: {region_name.upper()} (ID: {region_id})")
+            logger.info(f"{'=' * 60}")
+
+            result = self._import_region(region_name, region_id)
+
+            if result["success"]:
+                successful_regions.append(region_name)
+                self.region_stats[region_name] = result
+                self.total_segments += result["segments_saved"]
+                self.total_ways += result["ways_found"]
+
+                # Pause between regions to avoid rate limiting
+                time.sleep(5)
+            else:
+                failed_regions.append(region_name)
+                logger.error(f"Failed to import region {region_name}")
+
+        return {
+            "success": len(successful_regions) > 0,
+            "successful_regions": successful_regions,
+            "failed_regions": failed_regions,
+            "total_regions_processed": len(successful_regions),
+            "total_segments": self.total_segments,
+            "total_ways": self.total_ways,
+            "region_stats": self.region_stats,
+        }
+
+    def _import_region(self, region_name: str, region_id: int) -> dict:
+        """Import a single region."""
+        highway_types = AreaConfig.get_highway_types()
+        query = OSMQueryBuilder.build_region_query(region_id, highway_types)
+
+        logger.info(f"Fetching data for {region_name}...")
+
+        # Fetch data
+        data = None
+        for attempt in range(3):
+            data = self.api_client._make_request(query)
+            if data:
+                break
+            logger.warning(f"Attempt {attempt + 1} failed for {region_name}")
+            time.sleep(30)
+
+        if not data:
+            return {
+                "success": False,
+                "region": region_name,
+                "error": "Failed to fetch data",
+            }
+
+        # Check for empty response
+        elements = data.get("elements", [])
+        if not elements:
+            logger.warning(f"No elements found for region {region_name}")
+            return {
+                "success": False,
+                "region": region_name,
+                "error": "No elements found",
+            }
+
+        # Process data
+        self.data_processor.process_osm_data(data)
+        ways_count = len(self.data_processor.ways)
+        nodes_count = len(self.data_processor.nodes)
+
+        logger.info(f"Found {ways_count} ways and {nodes_count} nodes in {region_name}")
+
+        # Create segments - CORREZIONE QUI: usa enumerate invece di contatore separato
+        segments = []
+        for processed_count, way in enumerate(self.data_processor.ways, 1):  # CORRETTO
+            segment = self.data_processor.create_road_segment(way)
+            if segment:
+                segments.append(segment)
+
+            if processed_count % 1000 == 0:
+                logger.info(
+                    f"Processed {processed_count}/{ways_count} ways in {region_name}..."
+                )
+
+        segments_count = len(segments)
+
+        if not segments:
+            logger.warning(f"No valid road segments created for {region_name}")
+            return {
+                "success": False,
+                "region": region_name,
+                "error": "No valid segments",
+            }
+
+        # Save segments
+        saved_count = DatabaseManager.save_all_segments(segments)
+
+        # Clear processor
+        self.data_processor.nodes.clear()
+        self.data_processor.ways.clear()
+
+        logger.info(
+            f"{region_name}: Saved {saved_count} segments (from {ways_count} ways)"
+        )
+
+        return {
+            "success": True,
+            "region": region_name,
+            "elements_fetched": len(elements),
+            "ways_found": ways_count,
+            "segments_created": segments_count,
+            "segments_saved": saved_count,
+        }
 
 
 class OSMAPIClient:
@@ -147,33 +295,57 @@ class OSMAPIClient:
     def __init__(self):
         """Initialize the OSMAPIClient."""
         self.url = AreaConfig.get_osm_url()
+        self.session = requests.Session()
+        self.session.headers.update(
+            {
+                "User-Agent": "ApexGPS-Italy-Regional-Importer/1.0",
+                "Accept": "application/json",
+            }
+        )
 
     def fetch_roads_data(self, area_name: str) -> dict[str, Any] | None:
         """Fetch road data from OSM for given area."""
         try:
-            query = OSMQueryBuilder.build_roads_query(area_name)
-            logger.info(f"Query built ({len(query)} chars) for area: {area_name}")
+            area_name_norm = AreaConfig.normalize_area_name(area_name)
+            area_ids = AreaConfig.get_area_ids()
+
+            if area_name_norm not in area_ids:
+                raise ValueError(f"Unknown area: {area_name}")
+
+            area_id = area_ids[area_name_norm]
+            highway_types = AreaConfig.get_highway_types()
+
+            if area_name_norm == "italy":
+                return None
+            else:
+                query = OSMQueryBuilder.build_general_query(area_id, highway_types)
+                logger.info(f"Query built for area: {area_name}")
+                return self._make_request(query)
         except ValueError as e:
             logger.error(f"Query building failed: {e}")
             return None
-
-        return self._make_request(query)
 
     def _make_request(self, query: str, max_retries: int = 3) -> dict[str, Any] | None:
         """Make request to Overpass API with retries."""
         for attempt in range(max_retries):
             try:
-                logger.info(f"OSM request attempt {attempt + 1}/{max_retries}")
+                logger.debug(f"OSM request attempt {attempt + 1}/{max_retries}")
 
-                response = requests.post(
-                    self.url,
-                    data={"data": query},
-                    timeout=600,
-                    headers={"User-Agent": "ApexGPS/1.0"},
+                response = self.session.post(
+                    self.url, data={"data": query}, timeout=180
                 )
-                response.raise_for_status()
 
-                return response.json()
+                if response.status_code == 200:
+                    return response.json()
+                elif response.status_code == 429:
+                    # Rate limiting
+                    wait_time = (attempt + 1) * 30
+                    logger.warning(f"Rate limited. Waiting {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"HTTP {response.status_code}")
+                    if attempt < max_retries - 1:
+                        time.sleep(30)
 
             except requests.exceptions.Timeout:
                 if attempt < max_retries - 1:
@@ -281,13 +453,21 @@ class OSMDataProcessor:
         self.nodes.clear()
         self.ways.clear()
 
-        for element in osm_data.get("elements", []):
+        elements = osm_data.get("elements", [])
+        logger.info(f"Processing {len(elements)} elements...")
+
+        node_count = 0
+        way_count = 0
+
+        for element in elements:
             if element["type"] == "node":
                 self.nodes[element["id"]] = (element["lon"], element["lat"])
+                node_count += 1
             elif element["type"] == "way":
                 self.ways.append(element)
+                way_count += 1
 
-        logger.info(f"Processed {len(self.nodes)} nodes and {len(self.ways)} ways")
+        logger.info(f"Extracted {node_count} nodes and {way_count} ways")
 
     def extract_way_coordinates(self, way: dict) -> list[tuple[float, float]]:
         """Extract coordinates for a way."""
@@ -295,9 +475,15 @@ class OSMDataProcessor:
             return []
 
         coords = []
+        missing_nodes = 0
         for node_id in way["nodes"]:
             if node_id in self.nodes:
                 coords.append(self.nodes[node_id])
+            else:
+                missing_nodes += 1
+
+        if missing_nodes > 0:
+            logger.debug(f"Way {way.get('id')}: {missing_nodes} missing nodes")
 
         return coords
 
@@ -309,7 +495,11 @@ class OSMDataProcessor:
         tags = way.get("tags", {})
         highway_type = tags.get("highway", "")
 
-        return highway_type in AreaConfig.get_highway_types()
+        if not highway_type:
+            return False
+
+        valid_types = AreaConfig.get_highway_types()
+        return highway_type in valid_types
 
     def create_road_segment(self, way: dict) -> RoadSegment | None:
         """Create RoadSegment from OSM way."""
@@ -318,18 +508,19 @@ class OSMDataProcessor:
 
         coords = self.extract_way_coordinates(way)
         if len(coords) < 2:
+            logger.debug(f"Way {way.get('id')}: Not enough coordinates ({len(coords)})")
             return None
 
         try:
             line = LineString(coords, srid=4326)
         except Exception as e:
-            logger.debug(f"Failed to create LineString: {e}")
+            logger.debug(f"Failed to create LineString for way {way.get('id')}: {e}")
             return None
 
         tags = way.get("tags", {})
         length_m = DataParser.calculate_line_length(coords)
 
-        return RoadSegment(
+        segment = RoadSegment(
             osm_id=way["id"],
             name=tags.get("name", ""),
             highway=tags.get("highway", "unclassified"),
@@ -340,6 +531,8 @@ class OSMDataProcessor:
             lanes=DataParser.parse_lanes(tags.get("lanes")),
             length_m=length_m,
         )
+
+        return segment
 
 
 class DatabaseManager:
@@ -367,7 +560,7 @@ class DatabaseManager:
             return False
 
     @staticmethod
-    def save_all_segments(segments: list[RoadSegment], batch_size: int = 500) -> int:
+    def save_all_segments(segments: list[RoadSegment], batch_size: int = 1000) -> int:
         """Save all segments to database in batches."""
         total_saved = 0
 
@@ -409,6 +602,9 @@ class ImportPipeline:
         """Fetch data from OSM API."""
         logger.info(f"Fetching data for area: {self.area_name}")
 
+        if self.area_name.lower() == "italy":
+            return True
+
         osm_data = self.api_client.fetch_roads_data(self.area_name)
         if not osm_data:
             logger.error("Failed to fetch data from OSM API")
@@ -418,6 +614,9 @@ class ImportPipeline:
         self.data_processor.process_osm_data(osm_data)
         self.stats["ways_found"] = len(self.data_processor.ways)
 
+        if self.stats["ways_found"] == 0:
+            logger.error("No ways found in the response")
+            return False
         return True
 
     def process_data(self) -> list[RoadSegment]:
@@ -429,15 +628,14 @@ class ImportPipeline:
         logger.info(f"Processing {len(self.data_processor.ways)} ways...")
 
         segments = []
-        for i, way in enumerate(self.data_processor.ways):
+        # CORREZIONE QUI: rinominato i in _ per indicare che non viene usato
+        for _, way in enumerate(self.data_processor.ways):
             segment = self.data_processor.create_road_segment(way)
             if segment:
                 segments.append(segment)
 
-            if i > 0 and i % 1000 == 0:
-                logger.info(f"Processed {i}/{len(self.data_processor.ways)} ways...")
-
         self.stats["segments_created"] = len(segments)
+        logger.info(f"Created {len(segments)} road segments")
         return segments
 
     def save_to_database(
@@ -460,35 +658,58 @@ class ImportPipeline:
         self.stats["segments_saved"] = saved_count
         self.stats["total_in_db"] = RoadSegment.objects.count()
 
+        logger.info(f"Successfully saved {saved_count} segments")
         return saved_count > 0
 
     def run(self, clear_existing: bool = False) -> dict:
         """Run the complete import pipeline."""
         result = {"success": False, "error": None, "stats": self.stats.copy()}
 
-        # Validate area
-        if not self.validate_area():
-            result["error"] = "Invalid area name"
-            return result
+        try:
+            # Validate area
+            if not self.validate_area():
+                result["error"] = "Invalid area name"
+                return result
 
-        # Fetch data
-        if not self.fetch_data():
-            result["error"] = "Failed to fetch data from OSM"
-            return result
+            if self.area_name.lower() == "italy":
+                importer = RegionalItalyImporter()
+                regional_result = importer.import_all_regions(clear_existing)
 
-        # Process data
-        segments = self.process_data()
-        if not segments:
-            result["error"] = "No valid road segments created"
-            return result
+                if regional_result["success"]:
+                    result["success"] = True
+                    result["stats"] = {
+                        "total_segments": regional_result["total_segments"],
+                        "total_ways": regional_result["total_ways"],
+                        "successful_regions": len(
+                            regional_result["successful_regions"]
+                        ),
+                        "failed_regions": len(regional_result["failed_regions"]),
+                        "total_in_db": RoadSegment.objects.count(),
+                    }
+                    result["regional_details"] = regional_result
+                else:
+                    result["error"] = "Regional import failed"
+                return result
 
-        # Save to database
-        if not self.save_to_database(segments, clear_existing):
-            result["error"] = "Failed to save segments to database"
-            return result
+            if not self.fetch_data():
+                result["error"] = "Failed to fetch data from OSM"
+                return result
 
-        result["success"] = True
-        result["stats"] = self.stats.copy()
+            segments = self.process_data()
+            if not segments:
+                result["error"] = "No valid road segments created"
+                return result
+
+            if not self.save_to_database(segments, clear_existing):
+                result["error"] = "Failed to save segments to database"
+                return result
+
+            result["success"] = True
+            result["stats"] = self.stats.copy()
+
+        except Exception as e:
+            logger.error(f"Import pipeline error: {e}", exc_info=True)
+            result["error"] = f"Pipeline error: {str(e)}"
         return result
 
 
@@ -503,7 +724,8 @@ class Command(BaseCommand):
             "--area",
             type=str,
             default="italy",
-            help="Area to import (italy, test, lazio, etc.)",
+            help="Area to import (italy, test, or "
+            "specific region like lombardia, lazio, etc.)",
         )
         parser.add_argument(
             "--clear", action="store_true", help="Clear existing roads before import"
@@ -511,7 +733,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--batch-size",
             type=int,
-            default=500,
+            default=1000,
             help="Batch size for database inserts",
         )
         parser.add_argument(
@@ -558,22 +780,38 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS("IMPORT SUCCESSFUL"))
             stats = result["stats"]
 
-            self.stdout.write("\nStatistics:")
-            self.stdout.write(f"  Fetched elements: {stats['fetched_elements']:,}")
-            self.stdout.write(f"  Ways found: {stats['ways_found']:,}")
-            self.stdout.write(f"  Segments created: {stats['segments_created']:,}")
-            self.stdout.write(f"  Segments saved: {stats['segments_saved']:,}")
-            self.stdout.write(f"  Total in database: {stats['total_in_db']:,}")
+            if "regional_details" in result:
+                # Display regional import results
+                details = result["regional_details"]
+                self.stdout.write("\nRegional Import Summary:")
+                self.stdout.write(
+                    f"  Successful regions: {len(details['successful_regions'])}"
+                )
+                self.stdout.write(f"  Failed regions: {len(details['failed_regions'])}")
+                self.stdout.write(f"  Total segments: {details['total_segments']:,}")
+                self.stdout.write(f"  Total ways: {details['total_ways']:,}")
+
+                if details["successful_regions"]:
+                    self.stdout.write("\nSuccessfully imported regions:")
+                    for region in sorted(details["successful_regions"]):
+                        region_stat = details["region_stats"].get(region, {})
+                        segments = region_stat.get("segments_saved", 0)
+                        self.stdout.write(f"  - {region}: {segments:,} segments")
+
+                if details["failed_regions"]:
+                    self.stdout.write("\nFailed regions:")
+                    for region in sorted(details["failed_regions"]):
+                        self.stdout.write(f"  - {region}")
+            else:
+                self.stdout.write("\nStatistics:")
+                self.stdout.write(f"  Fetched elements: {stats['fetched_elements']:,}")
+                self.stdout.write(f"  Ways found: {stats['ways_found']:,}")
+                self.stdout.write(f"  Segments created: {stats['segments_created']:,}")
+                self.stdout.write(f"  Segments saved: {stats['segments_saved']:,}")
+                self.stdout.write(f"  Total in database: {stats['total_in_db']:,}")
         else:
             self.stdout.write(self.style.ERROR("IMPORT FAILED"))
             if result["error"]:
                 self.stdout.write(f"\nError: {result['error']}")
-
-            if result["stats"]["fetched_elements"] > 0:
-                self.stdout.write("\nPartial statistics:")
-                self.stdout.write(
-                    f"  Fetched elements: {result['stats']['fetched_elements']:,}"
-                )
-                self.stdout.write(f"  Ways found: {result['stats']['ways_found']:,}")
 
         self.stdout.write("=" * 60)
