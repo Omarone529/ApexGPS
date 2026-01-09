@@ -342,57 +342,20 @@ class RouteGeoSerializer(GeoFeatureModelSerializer):
 class RouteCalculationInputSerializer(serializers.Serializer):
     """
     Serializer for route calculation input.
-    Separate from RouteSerializer as this is for calculation, not CRUD.
+    Accepts location names which are automatically geocoded to coordinates.
     """
 
-    # Start coordinates
-    start_lat = serializers.FloatField(
+    start_location_name = serializers.CharField(
         required=True,
-        min_value=-90,
-        max_value=90,
-        help_text="Start latitude (-90 to 90)",
+        max_length=255,
+        help_text="Start location name (e.g., 'Roma, Italia')",
     )
-    start_lon = serializers.FloatField(
+    end_location_name = serializers.CharField(
         required=True,
-        min_value=-180,
-        max_value=180,
-        help_text="Start longitude (-180 to 180)",
+        max_length=255,
+        help_text="End location name (e.g., 'Milano, Italia')",
     )
 
-    # End coordinates
-    end_lat = serializers.FloatField(
-        required=True, min_value=-90, max_value=90, help_text="End latitude (-90 to 90)"
-    )
-    end_lon = serializers.FloatField(
-        required=True,
-        min_value=-180,
-        max_value=180,
-        help_text="End longitude (-180 to 180)",
-    )
-
-    # Routing preference (for future use with scenic routes)
-    preference = serializers.ChoiceField(
-        required=False,
-        choices=[
-            ("fast", "Veloce"),
-            ("balanced", "Equilibrata"),
-            ("most_winding", "Sinuosa Massima"),
-        ],
-        default="balanced",
-        help_text="Routing preference (for scenic routes)",
-    )
-
-    # Time constraint (40 minutes = 0.67 hours, we'll use percentage)
-    max_time_increase_pct = serializers.FloatField(
-        required=False,
-        min_value=0.1,
-        max_value=1.0,
-        default=0.5,
-        help_text="Maximum time increase as percentage"
-        " (0.5 = 50% = 40min on 80min base)",
-    )
-
-    # Advanced parameters
     vertex_threshold = serializers.FloatField(
         required=False,
         min_value=0.0001,
@@ -401,17 +364,46 @@ class RouteCalculationInputSerializer(serializers.Serializer):
         help_text="Vertex snapping threshold in degrees (~1km)",
     )
 
-    include_fastest = serializers.BooleanField(
-        required=False,
-        default=False,
-        help_text="Include fastest route in response (for benchmarking)",
-    )
-
     def validate(self, data):
-        """Custom validation for coordinate pairs."""
-        # Validate coordinates are within Italy bounds
-        start_lat, start_lon = data.get("start_lat"), data.get("start_lon")
-        end_lat, end_lon = data.get("end_lat"), data.get("end_lon")
+        """Validate input and geocode location names."""
+        try:
+            from routes.services.geocoding import GeocodingService
+        except ImportError as e:
+            raise serializers.ValidationError(
+                {"error": "Geocoding service not available"}
+            ) from e
+
+        # Geocode start location
+        start_location_name = data["start_location_name"]
+        start_point = GeocodingService.geocode_location(start_location_name)
+
+        if not start_point:
+            raise serializers.ValidationError(
+                {
+                    "start_location_name": f"Cannot find coordinates for"
+                    f" '{start_location_name}'"
+                }
+            )
+
+        data["start_lat"] = start_point.y
+        data["start_lon"] = start_point.x
+        data["geocoded_start"] = True
+
+        # Geocode end location
+        end_location_name = data["end_location_name"]
+        end_point = GeocodingService.geocode_location(end_location_name)
+
+        if not end_point:
+            raise serializers.ValidationError(
+                {
+                    "end_location_name": f"Cannot find coordinates for"
+                    f" '{end_location_name}'"
+                }
+            )
+
+        data["end_lat"] = end_point.y
+        data["end_lon"] = end_point.x
+        data["geocoded_end"] = True
 
         # Italy bounds check
         ITALY_BOUNDS = {
@@ -422,17 +414,40 @@ class RouteCalculationInputSerializer(serializers.Serializer):
         }
 
         for name, lat, lon in [
-            ("start", start_lat, start_lon),
-            ("end", end_lat, end_lon),
+            ("start_location_name", data["start_lat"], data["start_lon"]),
+            ("end_location_name", data["end_lat"], data["end_lon"]),
         ]:
             if not (ITALY_BOUNDS["min_lat"] <= lat <= ITALY_BOUNDS["max_lat"]):
                 raise serializers.ValidationError(
-                    {name: f"Latitude {lat} is outside Italy bounds (35° to 47°)"}
+                    {
+                        name: f"Latitude {lat} is outside Italy bounds (35° to 47°). "
+                        f"Please choose a location within Italy."
+                    }
                 )
             if not (ITALY_BOUNDS["min_lon"] <= lon <= ITALY_BOUNDS["max_lon"]):
                 raise serializers.ValidationError(
-                    {name: f"Longitude {lon} is outside Italy bounds (6° to 19°)"}
+                    {
+                        name: f"Longitude {lon} is outside Italy bounds (6° to 19°). "
+                        f"Please choose a location within Italy."
+                    }
                 )
+
+        return data
+
+    def to_representation(self, instance):
+        """Format response to include both names and coordinates."""
+        data = super().to_representation(instance)
+
+        # add geocoded coordinates to the rensponse
+        if hasattr(self, "validated_data"):
+            data["start_coordinates"] = {
+                "lat": self.validated_data.get("start_lat"),
+                "lon": self.validated_data.get("start_lon"),
+            }
+            data["end_coordinates"] = {
+                "lat": self.validated_data.get("end_lat"),
+                "lon": self.validated_data.get("end_lon"),
+            }
 
         return data
 
