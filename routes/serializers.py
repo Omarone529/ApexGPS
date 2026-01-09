@@ -13,8 +13,7 @@ __all__ = [
     "RouteCreateSerializer",
     "RouteUpdateSerializer",
     "RouteGeoSerializer",
-    "RouteCoordinatesInputSerializer",
-    "RouteLocationNamesInputSerializer",
+    "RouteCalculationInputSerializer",
     "RouteCalculationResultSerializer",
     "RouteCalculationResponseSerializer",
 ]
@@ -340,62 +339,11 @@ class RouteGeoSerializer(GeoFeatureModelSerializer):
         fields = ["id", "name", "owner", "visibility", "distance_km"]
 
 
-class RouteCoordinatesInputSerializer(serializers.Serializer):
-    """Serializer for direct coordinate input."""
-
-    start_lat = serializers.FloatField(
-        required=True,
-        min_value=-90.0,
-        max_value=90.0,
-        help_text="Start latitude",
-    )
-    start_lon = serializers.FloatField(
-        required=True,
-        min_value=-180.0,
-        max_value=180.0,
-        help_text="Start longitude",
-    )
-    end_lat = serializers.FloatField(
-        required=True,
-        min_value=-90.0,
-        max_value=90.0,
-        help_text="End latitude",
-    )
-    end_lon = serializers.FloatField(
-        required=True,
-        min_value=-180.0,
-        max_value=180.0,
-        help_text="End longitude",
-    )
-
-    # Optional fields for display
-    start_location_name = serializers.CharField(
-        required=False,
-        max_length=255,
-        help_text="Start location name (for display only)",
-    )
-    end_location_name = serializers.CharField(
-        required=False,
-        max_length=255,
-        help_text="End location name (for display only)",
-    )
-
-    vertex_threshold = serializers.FloatField(
-        required=False,
-        min_value=0.0001,
-        max_value=0.1,
-        default=0.01,
-        help_text="Vertex snapping threshold in degrees (~1km)",
-    )
-
-    def validate(self, data):
-        """Validate coordinates and ensure Italy bounds."""
-        data = super().validate(data)
-        return RouteCoordinatesInputValidator.validate(data)
-
-
-class RouteLocationNamesInputSerializer(serializers.Serializer):
-    """Serializer for location name input."""
+class RouteCalculationInputSerializer(serializers.Serializer):
+    """
+    Serializer for route calculation input.
+    Accepts location names which are automatically geocoded to coordinates.
+    """
 
     start_location_name = serializers.CharField(
         required=True,
@@ -417,135 +365,6 @@ class RouteLocationNamesInputSerializer(serializers.Serializer):
     )
 
     def validate(self, data):
-        """Validate and geocode location names."""
-        data = super().validate(data)
-        return RouteLocationNamesValidator.validate_and_geocode(data)
-
-
-class RouteCalculationResultSerializer(serializers.Serializer):
-    """
-    Serializer for route calculation results.
-    Used only for API response, not for saving to database.
-    """
-
-    # Basic route info
-    preference = serializers.CharField(help_text="Routing preference used")
-    total_distance_km = serializers.FloatField(help_text="Total distance in km")
-    total_time_minutes = serializers.FloatField(help_text="Total time in minutes")
-
-    # For map display
-    polyline = serializers.CharField(
-        required=False, help_text="Encoded polyline for map"
-    )
-
-    # Time constraint info
-    time_constraint_respected = serializers.BooleanField(
-        required=False, help_text="Whether time constraint was respected"
-    )
-    time_exceeded_minutes = serializers.FloatField(
-        required=False, help_text="Minutes exceeded beyond constraint"
-    )
-
-    # Scenic metrics
-    total_scenic_score = serializers.FloatField(
-        required=False, help_text="Total scenic score along route"
-    )
-    avg_scenic_rating = serializers.FloatField(
-        required=False, help_text="Average scenic rating"
-    )
-
-    # For saving to database
-    can_save = serializers.BooleanField(
-        help_text="Whether this route can be saved to database"
-    )
-
-    def to_representation(self, instance):
-        """Format the response with human-readable fields."""
-        data = super().to_representation(instance)
-        data = RouteResponseFormatter.format_route_response(data)
-        return data
-
-
-class RouteCalculationResponseSerializer(serializers.Serializer):
-    """Complete response for route calculation."""
-
-    # Fastest route (benchmark - hidden from user but needed for constraint)
-    fastest_route = RouteCalculationResultSerializer(
-        required=False, help_text="Fastest route (benchmark, hidden from user)"
-    )
-
-    # Calculated routes
-    calculated_routes = serializers.DictField(
-        child=RouteCalculationResultSerializer(),
-        help_text="Calculated scenic routes by preference",
-    )
-
-    # Best route by preference
-    best_route = RouteCalculationResultSerializer(
-        help_text="Best scenic route for the requested preference"
-    )
-
-    # Validation info
-    validation = serializers.DictField(help_text="Validation results and warnings")
-
-    # Processing info
-    processing_time_ms = serializers.FloatField(
-        help_text="Processing time in milliseconds"
-    )
-
-
-# Helper classes for validation
-class RouteCoordinatesInputValidator:
-    """Utility class for validating coordinate input."""
-
-    @staticmethod
-    def validate(data):
-        """Validate coordinates and ensure Italy bounds."""
-        ITALY_BOUNDS = {
-            "min_lat": 35.0,
-            "max_lat": 47.0,
-            "min_lon": 6.0,
-            "max_lon": 19.0,
-        }
-
-        for name, lat, lon in [
-            ("start", data["start_lat"], data["start_lon"]),
-            ("end", data["end_lat"], data["end_lon"]),
-        ]:
-            if not (ITALY_BOUNDS["min_lat"] <= lat <= ITALY_BOUNDS["max_lat"]):
-                raise serializers.ValidationError(
-                    {
-                        f"{name}_coordinates": f"Latitude {lat} "
-                        f"is outside Italy bounds (35° to 47°). "
-                        f"Please choose a location within Italy."
-                    }
-                )
-            if not (ITALY_BOUNDS["min_lon"] <= lon <= ITALY_BOUNDS["max_lon"]):
-                raise serializers.ValidationError(
-                    {
-                        f"{name}_coordinates": f"Longitude {lon} "
-                        f"is outside Italy bounds (6° to 19°). "
-                        f"Please choose a location within Italy."
-                    }
-                )
-
-        # Generate location names if not provided
-        if not data.get("start_location_name"):
-            data[
-                "start_location_name"
-            ] = f"{data['start_lat']:.4f}, {data['start_lon']:.4f}"
-
-        if not data.get("end_location_name"):
-            data["end_location_name"] = f"{data['end_lat']:.4f}, {data['end_lon']:.4f}"
-
-        return data
-
-
-class RouteLocationNamesValidator:
-    """Utility class for validating and geocoding location names."""
-
-    @staticmethod
-    def validate_and_geocode(data):
         """Validate input and geocode location names."""
         try:
             from routes.services.geocoding import GeocodingService
@@ -586,15 +405,95 @@ class RouteLocationNamesValidator:
         data["end_lon"] = end_point.x
         data["geocoded_end"] = True
 
-        return RouteCoordinatesInputValidator.validate(data)
+        # Italy bounds check
+        ITALY_BOUNDS = {
+            "min_lat": 35.0,
+            "max_lat": 47.0,
+            "min_lon": 6.0,
+            "max_lon": 19.0,
+        }
+
+        for name, lat, lon in [
+            ("start_location_name", data["start_lat"], data["start_lon"]),
+            ("end_location_name", data["end_lat"], data["end_lon"]),
+        ]:
+            if not (ITALY_BOUNDS["min_lat"] <= lat <= ITALY_BOUNDS["max_lat"]):
+                raise serializers.ValidationError(
+                    {
+                        name: f"Latitude {lat} is outside Italy bounds (35° to 47°). "
+                        f"Please choose a location within Italy."
+                    }
+                )
+            if not (ITALY_BOUNDS["min_lon"] <= lon <= ITALY_BOUNDS["max_lon"]):
+                raise serializers.ValidationError(
+                    {
+                        name: f"Longitude {lon} is outside Italy bounds (6° to 19°). "
+                        f"Please choose a location within Italy."
+                    }
+                )
+
+        return data
+
+    def to_representation(self, instance):
+        """Format response to include both names and coordinates."""
+        data = super().to_representation(instance)
+
+        # add geocoded coordinates to the rensponse
+        if hasattr(self, "validated_data"):
+            data["start_coordinates"] = {
+                "lat": self.validated_data.get("start_lat"),
+                "lon": self.validated_data.get("start_lon"),
+            }
+            data["end_coordinates"] = {
+                "lat": self.validated_data.get("end_lat"),
+                "lon": self.validated_data.get("end_lon"),
+            }
+
+        return data
 
 
-class RouteResponseFormatter:
-    """Utility class for formatting route responses."""
+class RouteCalculationResultSerializer(serializers.Serializer):
+    """
+    Serializer for route calculation results.
+    Used only for API response, not for saving to database.
+    """
 
-    @staticmethod
-    def format_route_response(data):
-        """Add human-readable fields to route response."""
+    # Basic route info
+    preference = serializers.CharField(help_text="Routing preference used")
+    total_distance_km = serializers.FloatField(help_text="Total distance in km")
+    total_time_minutes = serializers.FloatField(help_text="Total time in minutes")
+
+    # For map display
+    polyline = serializers.CharField(
+        required=False, help_text="Encoded polyline for map"
+    )
+
+    # Time constraint info
+    time_constraint_respected = serializers.BooleanField(
+        required=False, help_text="Whether time constraint was respected"
+    )
+    time_exceeded_minutes = serializers.FloatField(
+        required=False, help_text="Minutes exceeded beyond constraint"
+    )
+
+    # Scenic metrics
+    total_scenic_score = serializers.FloatField(
+        required=False, help_text="Total scenic score along route"
+    )
+    avg_scenic_rating = serializers.FloatField(
+        required=False, help_text="Average scenic rating"
+    )
+
+    # For saving to database
+    can_save = serializers.BooleanField(
+        help_text="Whether this route can be saved to database"
+    )
+
+    def to_representation(self, instance):
+        """Format the response."""
+        data = super().to_representation(instance)
+
+        # Add human-readable fields
         if "total_time_minutes" in data:
             hours = int(data["total_time_minutes"] // 60)
             minutes = int(data["total_time_minutes"] % 60)
@@ -604,3 +503,34 @@ class RouteResponseFormatter:
             data["total_distance_formatted"] = f"{data['total_distance_km']:.1f} km"
 
         return data
+
+
+class RouteCalculationResponseSerializer(serializers.Serializer):
+    """
+    Complete response for route calculation.
+    Used for scenic routes (to be implemented in PR #3).
+    """
+
+    # Fastest route (benchmark - hidden from user but needed for constraint)
+    fastest_route = RouteCalculationResultSerializer(
+        required=False, help_text="Fastest route (benchmark, hidden from user)"
+    )
+
+    # Calculated routes
+    calculated_routes = serializers.DictField(
+        child=RouteCalculationResultSerializer(),
+        help_text="Calculated scenic routes by preference",
+    )
+
+    # Best route by preference
+    best_route = RouteCalculationResultSerializer(
+        help_text="Best scenic route for the requested preference"
+    )
+
+    # Validation info
+    validation = serializers.DictField(help_text="Validation results and warnings")
+
+    # Processing info
+    processing_time_ms = serializers.FloatField(
+        help_text="Processing time in milliseconds"
+    )
