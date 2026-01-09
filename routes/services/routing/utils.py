@@ -256,3 +256,147 @@ def _create_route_geometry(segments: list[dict]) -> LineString | None:
             all_coords.extend(coords)
 
     return _create_linestring_from_coords(all_coords)
+
+
+def _format_time_minutes(minutes: float) -> str:
+    """Format minutes to human-readable time string."""
+    hours = int(minutes // 60)
+    mins = int(minutes % 60)
+
+    if hours > 0:
+        return f"{hours}h {mins}min"
+    return f"{mins}min"
+
+
+def _format_distance_km(distance_km: float) -> str:
+    """Format distance to human-readable string."""
+    if distance_km >= 100:
+        return f"{distance_km:.0f} km"
+    elif distance_km >= 10:
+        return f"{distance_km:.1f} km"
+    else:
+        return f"{distance_km:.2f} km"
+
+
+def _calculate_route_segments(routing_service, points: list) -> dict:
+    """Calculate route through multiple points."""
+    if len(points) < 2:
+        return {
+            "success": False,
+            "error": "Need at least 2 points",
+            "total_distance_km": 0,
+            "total_time_minutes": 0,
+        }
+
+    total_distance_km = 0
+    total_time_minutes = 0
+    segments_info = []
+
+    for i in range(len(points) - 1):
+        start_point = points[i]
+        end_point = points[i + 1]
+
+        segment_result = routing_service.calculate_route(
+            start_point=start_point,
+            end_point=end_point,
+            vertex_threshold=0.01,
+        )
+
+        if segment_result:
+            segment_distance = segment_result.get("total_distance_km", 0)
+            segment_time = segment_result.get("total_time_minutes", 0)
+
+            total_distance_km += segment_distance
+            total_time_minutes += segment_time
+
+            segments_info.append(
+                {
+                    "index": i,
+                    "distance_km": segment_distance,
+                    "time_minutes": segment_time,
+                    "success": True,
+                }
+            )
+        else:
+            segments_info.append(
+                {
+                    "index": i,
+                    "distance_km": 0,
+                    "time_minutes": 0,
+                    "success": False,
+                    "error": f"No route found from point {i} to {i + 1}",
+                }
+            )
+
+    return {
+        "success": True,
+        "total_distance_km": total_distance_km,
+        "total_time_minutes": total_time_minutes,
+        "segment_count": len(segments_info),
+        "segments": segments_info,
+        "all_segments_valid": all(seg.get("success", False) for seg in segments_info),
+    }
+
+
+def _prepare_route_response(
+    fastest_route: dict,
+    start_data: dict,
+    end_data: dict,
+    validation_result: dict,
+    processing_time: float,
+) -> dict:
+    """Prepare standardized route response."""
+    return {
+        "route_type": "fastest",
+        "purpose": "baseline_for_scenic_routes",
+        # Location names
+        "start_location": start_data.get("name"),
+        "end_location": end_data.get("name"),
+        # Coordinates
+        "start_coordinates": {
+            "lat": start_data.get("lat"),
+            "lon": start_data.get("lon"),
+        },
+        "end_coordinates": {
+            "lat": end_data.get("lat"),
+            "lon": end_data.get("lon"),
+        },
+        # Route metrics
+        "total_distance_km": fastest_route.get("total_distance_km", 0),
+        "total_time_minutes": fastest_route.get("total_time_minutes", 0),
+        "total_distance_m": fastest_route.get("total_distance_m", 0),
+        "total_time_seconds": fastest_route.get("total_time_seconds", 0),
+        "segment_count": fastest_route.get("segment_count", 0),
+        "total_segments": fastest_route.get("total_segments", 0),
+        # Formatted metrics
+        "total_distance_formatted": _format_distance_km(
+            fastest_route.get("total_distance_km", 0)
+        ),
+        "total_time_formatted": _format_time_minutes(
+            fastest_route.get("total_time_minutes", 0)
+        ),
+        # Geometry
+        "polyline": fastest_route.get("polyline", ""),
+        "has_geometry": fastest_route.get("geometry") is not None,
+        # Network info
+        "start_vertex": fastest_route.get("start_vertex"),
+        "end_vertex": fastest_route.get("end_vertex"),
+        "vertex_count": fastest_route.get("vertex_count", 0),
+        # Validation
+        "validation": {
+            "is_valid": validation_result.get("is_valid", False),
+            "warnings": validation_result.get("warnings", []),
+            "start_vertex": validation_result.get("start_vertex"),
+            "end_vertex": validation_result.get("end_vertex"),
+        },
+        # Processing info
+        "processing_time_ms": round(processing_time * 1000, 2),
+        "database_status": "real_osm_data",
+        # Geocoding info
+        "geocoding_status": {
+            "start_geocoded": start_data.get("geocoded", False),
+            "end_geocoded": end_data.get("geocoded", False),
+            "start_original_name": start_data.get("original_name", ""),
+            "end_original_name": end_data.get("original_name", ""),
+        },
+    }
