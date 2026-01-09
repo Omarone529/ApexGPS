@@ -134,26 +134,34 @@ class APIClient:
         )
 
     def execute_query(
-        self, endpoint: str, query: str, timeout: int = 120
+        self, endpoint: str, query: str, timeout: int = 180
     ) -> dict | None:
         """Execute Overpass query and return parsed JSON."""
-        try:
-            response = self.session.post(
-                endpoint, data={"data": query}, timeout=timeout
-            )
+        for attempt in range(3):
+            try:
+                response = self.session.post(
+                    endpoint, data={"data": query}, timeout=timeout
+                )
 
-            if response.status_code == 200:
-                return response.json()
-            else:
-                logger.warning(f"HTTP {response.status_code} from {endpoint}")
+                if response.status_code == 200:
+                    return response.json()
+                else:
+                    logger.warning(f"HTTP {response.status_code} from {endpoint}")
+
+            except requests.exceptions.Timeout:
+                logger.warning(f"Timeout from {endpoint} (attempt {attempt + 1}/3)")
+                if attempt < 2:
+                    time.sleep(30)
+                    continue
+                return None
+            except requests.exceptions.RequestException as e:
+                logger.warning(f"Request error from {endpoint}: {e}")
+                if attempt < 2:
+                    time.sleep(30)
+                    continue
                 return None
 
-        except requests.exceptions.Timeout:
-            logger.warning(f"Timeout from {endpoint}")
-            return None
-        except requests.exceptions.RequestException as e:
-            logger.warning(f"Request error from {endpoint}: {e}")
-            return None
+        return None
 
 
 class EndpointManager:

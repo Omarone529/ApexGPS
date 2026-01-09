@@ -114,7 +114,21 @@ class DatabaseStatusChecker:
                     "message": "No road segments found in database.",
                     "road_count": 0,
                     "next_action": "Import roads: python manage.py "
-                    "import_osm_roads --area italy",
+                    "import_osm_roads --area italy --clear --verbose",
+                }
+            )
+            return status
+
+        # Check if there are enough data for Italy
+        if road_count < 10000:
+            status.update(
+                {
+                    "status": "insufficient_data",
+                    "message": f"Only {road_count:,} road segments found. "
+                    "Italy should have > 100,000.",
+                    "road_count": road_count,
+                    "next_action": "Re-import roads: python manage.py "
+                    "import_osm_roads --area italy --clear --verbose",
                 }
             )
             return status
@@ -127,7 +141,7 @@ class DatabaseStatusChecker:
                     "message": "Roads exist but topology not created.",
                     "road_count": road_count,
                     "next_action": "Prepare GIS data: python manage.py "
-                    "prepare_gis_data --area italy",
+                    "prepare_gis_data --area italy --verbose --force",
                 }
             )
             return status
@@ -141,7 +155,7 @@ class DatabaseStatusChecker:
                     "message": "Topology exists but routing costs not calculated.",
                     "road_count": road_count,
                     "next_action": "Prepare GIS data: python manage.py "
-                    "prepare_gis_data --area italy",
+                    "prepare_gis_data --area italy --verbose --force",
                 }
             )
             return status
@@ -155,7 +169,7 @@ class DatabaseStatusChecker:
                     "road_count": road_count,
                     "scenic_costs_calculated": scenic_cost_count,
                     "next_action": "Import POIs: python manage.py "
-                    "import_osm_pois --area italy",
+                    "import_osm_pois --area italy --verbose",
                 }
             )
             return status
@@ -169,7 +183,23 @@ class DatabaseStatusChecker:
                     "road_count": road_count,
                     "scenic_costs_calculated": scenic_cost_count,
                     "next_action": "Import POIs: python manage.py "
-                    "import_osm_pois --area italy",
+                    "import_osm_pois --area italy --verbose",
+                }
+            )
+            return status
+
+        # Check if there are  enough POIs for Italy
+        if poi_count < 1000:
+            status.update(
+                {
+                    "status": "insufficient_pois",
+                    "message": f"Only {poi_count:,} POIs found. "
+                    "Italy should have > 10,000.",
+                    "road_count": road_count,
+                    "poi_count": poi_count,
+                    "scenic_costs_calculated": scenic_cost_count,
+                    "next_action": "Re-import POIs: python manage.py "
+                    "import_osm_pois --area italy --clear --verbose",
                 }
             )
             return status
@@ -205,10 +235,10 @@ class RoadImportManager:
         if force:
             return True
 
-        if current_status in ["not_ready"]:
+        if current_status in ["not_ready", "insufficient_data"]:
             return True
 
-        return self.road_count_before == 0
+        return self.road_count_before < 10000  # Se meno di 10k, reimporta
 
     def run_import(self, force: bool) -> bool:
         """Run road import."""
@@ -220,6 +250,16 @@ class RoadImportManager:
             call_command(*args)
             self.imported = True
             self.road_count_after = RoadSegment.objects.count()
+            logger.info(f"Road import completed: {self.road_count_after:,} segments")
+            if self.road_count_after < 10000 and self.area == "italy":
+                logger.warning(
+                    f"Warning: Only {self.road_count_after:,}"
+                    f" segments imported for Italy"
+                )
+                logger.warning(
+                    "Expected > 100,000 segments. The import may have failed."
+                )
+
             return True
         except Exception as e:
             logger.error(f"Road import failed: {e}")
@@ -255,10 +295,17 @@ class POIImportManager:
         if force:
             return True
 
-        if current_status in ["ready_without_pois", "not_ready", "partially_ready"]:
+        if current_status in [
+            "ready_without_pois",
+            "not_ready",
+            "partially_ready",
+            "insufficient_pois",
+            "insufficient_data",
+        ]:
             return True
 
-        return self.poi_count_before == 0
+        # if there are few, re-import
+        return self.poi_count_before < 1000
 
     def run_import(self, force: bool) -> bool:
         """Run POI import."""
@@ -277,6 +324,14 @@ class POIImportManager:
             call_command(*args)
             self.imported = True
             self.poi_count_after = PointOfInterest.objects.count()
+            logger.info(f"POI import completed: {self.poi_count_after:,} points")
+
+            if self.poi_count_after < 1000 and self.area == "italy":
+                logger.warning(
+                    f"Warning: Only {self.poi_count_after:,} POIs imported for Italy"
+                )
+                logger.warning("Expected > 10,000 POIs.")
+
             return True
         except Exception as e:
             logger.error(f"POI import failed: {e}")
@@ -305,7 +360,7 @@ class GISPreparationManager:
         if force:
             return True
 
-        return current_status in ["partially_ready", "not_ready"]
+        return current_status in ["partially_ready", "insufficient_data"]
 
     def run_preparation(self, force: bool) -> bool:
         """Run GIS data preparation."""
@@ -374,7 +429,7 @@ class SetupPipeline:
         else:
             road_count = self.road_import_manager.road_count_before
             self.stats["steps_completed"].append(
-                f"Roads already exist: {road_count} segments"
+                f"Roads already exist: {road_count:,} segments"
             )
             return True
 
@@ -397,7 +452,7 @@ class SetupPipeline:
         else:
             poi_count = self.poi_import_manager.poi_count_before
             self.stats["steps_completed"].append(
-                f"POIs already exist: {poi_count} points"
+                f"POIs already exist: {poi_count:,} points"
             )
             return True
 
@@ -564,7 +619,7 @@ class Command(BaseCommand):
                     )
 
         else:
-            self.stdout.write(self.style.ERROR("✗ Database setup failed!"))
+            self.stdout.write(self.style.ERROR("Database setup failed!"))
 
             if stats["errors"]:
                 self.stdout.write(f"\nErrors encountered ({len(stats['errors'])}):")
