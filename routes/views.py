@@ -127,8 +127,8 @@ class RouteViewSet(viewsets.ModelViewSet):
     )
     def calculate_fastest_route(self, request):
         """
-        Calculate FASTEST route between two points using OSM data.
-        This endpoint calculates the fastest route to establish a time baseline.
+        Calculate FASTEST route between two locations.
+        Accepts location names which are automatically geocoded.
         """
         start_time = time.time()
 
@@ -142,24 +142,23 @@ class RouteViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        # Validate input
-        simplified_data = request.data.copy()
-        simplified_data.pop("preference", None)
-        simplified_data.pop("max_time_increase_pct", None)
-        simplified_data.pop("include_fastest", None)
-
-        input_serializer = RouteCalculationInputSerializer(data=simplified_data)
+        # Validate input - ora accetta solo nomi di località
+        input_serializer = RouteCalculationInputSerializer(data=request.data)
         if not input_serializer.is_valid():
             return Response(input_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         validated_data = input_serializer.validated_data
 
-        # Extract parameters
+        # Extract parameters - ora abbiamo già le coordinate geocodificate
         start_lat = validated_data["start_lat"]
         start_lon = validated_data["start_lon"]
         end_lat = validated_data["end_lat"]
         end_lon = validated_data["end_lon"]
         vertex_threshold = validated_data.get("vertex_threshold", 0.01)
+
+        # Nomi originali delle località
+        start_location_name = validated_data["start_location_name"]
+        end_location_name = validated_data["end_location_name"]
 
         # Initialize services
         fast_service = FastRoutingService()
@@ -204,9 +203,14 @@ class RouteViewSet(viewsets.ModelViewSet):
 
             # Prepare comprehensive response
             response_data = {
-                "route_type": "fastest_benchmark",
-                "purpose": "internal_benchmark_only",
-                "warning": "This route is for benchmarking only, not shown to users",
+                "route_type": "fastest",
+                "purpose": "baseline_for_scenic_routes",
+                # Location names
+                "start_location": start_location_name,
+                "end_location": end_location_name,
+                # Coordinates
+                "start_coordinates": {"lat": start_lat, "lon": start_lon},
+                "end_coordinates": {"lat": end_lat, "lon": end_lon},
                 # Route metrics
                 "total_distance_km": fastest_route["total_distance_km"],
                 "total_time_minutes": fastest_route["total_time_minutes"],
@@ -231,11 +235,13 @@ class RouteViewSet(viewsets.ModelViewSet):
                 # Processing info
                 "processing_time_ms": round((time.time() - start_time) * 1000, 2),
                 "database_status": "real_osm_data",
-                # Coordinates
-                "start_coordinates": {"lat": start_lat, "lon": start_lon},
-                "end_coordinates": {"lat": end_lat, "lon": end_lon},
-                "start_point_snapped": validation_result["start_vertex"] is not None,
-                "end_point_snapped": validation_result["end_vertex"] is not None,
+                # Geocoding info
+                "geocoding_status": {
+                    "start_geocoded": True,
+                    "end_geocoded": True,
+                    "start_original_name": start_location_name,
+                    "end_original_name": end_location_name,
+                },
             }
 
             return Response(response_data, status=status.HTTP_200_OK)
