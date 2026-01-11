@@ -29,12 +29,9 @@ services:
         condition: service_healthy
     command: >
       sh -c "
-        echo 'APEXGPS - Setup in corso...';
-        sleep 15;
-        python manage.py migrate;
-        echo 'Setting up database...';
-        python manage.py setup_database --area italy --verbose --test-mode;
-        echo 'Setup completed. Starting server...';
+        sleep 5;
+        python manage.py migrate --no-input;
+        python manage.py load_operational_dataset;
         python manage.py runserver 0.0.0.0:8000;
       "
     environment:
@@ -52,5 +49,6 @@ services:
       LOCAL_PATH2: ${LOCAL_PATH2}
       INIT_AREA: italy
       NOMINATIM_URL: ${NOMINATIM_URL}
+
 volumes:
   pgdata:
