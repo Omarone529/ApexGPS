@@ -1,5 +1,5 @@
 import logging
-import traceback
+import os
 from typing import Any
 
 from django.apps import apps
@@ -8,12 +8,13 @@ from django.core.management.base import BaseCommand
 from django.db import connection
 
 from gis_data.models import PointOfInterest, RoadSegment
+from gis_data.utils.osm_utils import OSMConfig
 
 logger = logging.getLogger(__name__)
 
 
 class DatabaseStatusChecker:
-    """Checker for database status."""
+    """Checker for database status with regional import awareness."""
 
     def __init__(self):
         """Initialize the DatabaseStatusChecker."""
@@ -47,8 +48,7 @@ class DatabaseStatusChecker:
                     [table_name],
                 )
                 return cursor.fetchone()[0]
-        except Exception as e:
-            logger.debug(f"Error checking table {table_name}: {e}")
+        except Exception:
             return False
 
     def _get_row_count(self, table_name: str) -> int:
@@ -60,8 +60,7 @@ class DatabaseStatusChecker:
             with connection.cursor() as cursor:
                 cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
                 return cursor.fetchone()[0]
-        except Exception as e:
-            logger.warning(f"Error counting rows in {table_name}: {e}")
+        except Exception:
             return 0
 
     def _get_scenic_cost_count(self) -> int:
@@ -78,8 +77,7 @@ class DatabaseStatusChecker:
                 """
                 )
                 return cursor.fetchone()[0]
-        except Exception as e:
-            logger.warning(f"Error counting scenic costs: {e}")
+        except Exception:
             return 0
 
     def _check_topology_exists(self) -> bool:
@@ -89,6 +87,39 @@ class DatabaseStatusChecker:
 
         topology_table = f"{self.roads_table}_vertices_pgr"
         return self._safe_table_exists(topology_table)
+
+    def _check_italian_regions_coverage(self) -> tuple[int, list[str]]:
+        """Check how many Italian regions have been imported."""
+        if not self.roads_table:
+            return 0, []
+
+        try:
+            with connection.cursor() as cursor:
+                # Count distinct OSM IDs as a proxy for data coverage
+                cursor.execute(f"SELECT COUNT(DISTINCT osm_id) FROM {self.roads_table}")
+                osm_count = cursor.fetchone()[0]
+
+                # Estimate regions based on road count
+                if osm_count > 200000:
+                    estimated_regions = len(OSMConfig.ALL_REGIONS)
+                elif osm_count > 50000:
+                    estimated_regions = len(OSMConfig.ALL_REGIONS) // 2
+                elif osm_count > 10000:
+                    estimated_regions = 5
+                elif osm_count > 1000:
+                    estimated_regions = 1
+                else:
+                    estimated_regions = 0
+
+                return (
+                    estimated_regions,
+                    OSMConfig.ALL_REGIONS[:estimated_regions]
+                    if estimated_regions > 0
+                    else [],
+                )
+
+        except Exception:
+            return 0, []
 
     def check_status(self) -> dict[str, Any]:
         """Check current status of database preparation."""
@@ -114,21 +145,27 @@ class DatabaseStatusChecker:
                     "message": "No road segments found in database.",
                     "road_count": 0,
                     "next_action": "Import roads: python manage.py "
-                    "import_osm_roads --area italy --clear --verbose",
+                    "import_osm_roads --regions all --sequential --verbose",
                 }
             )
             return status
 
-        # Check if there are enough data for Italy
-        if road_count < 10000:
+        # Check region coverage
+        regions_covered, covered_list = self._check_italian_regions_coverage()
+
+        # Check if there is sufficient data for routing
+        if road_count < 10000:  # Minimum for basic routing
             status.update(
                 {
                     "status": "insufficient_data",
-                    "message": f"Only {road_count:,} road segments found. "
-                    "Italy should have > 100,000.",
+                    "message": f"Only {road_count:,} road segments found from"
+                    f" {regions_covered} regions. "
+                    f"Need at least 10,000 segments for basic routing.",
                     "road_count": road_count,
-                    "next_action": "Re-import roads: python manage.py "
-                    "import_osm_roads --area italy --clear --verbose",
+                    "regions_covered": regions_covered,
+                    "covered_regions": covered_list,
+                    "next_action": "Import more regions: python manage.py "
+                    "import_osm_roads --regions all --sequential --verbose",
                 }
             )
             return status
@@ -138,8 +175,12 @@ class DatabaseStatusChecker:
             status.update(
                 {
                     "status": "partially_ready",
-                    "message": "Roads exist but topology not created.",
+                    "message": f"Roads exist ({road_count:,} "
+                    f"segments from {regions_covered} "
+                    f"regions) but topology not created.",
                     "road_count": road_count,
+                    "regions_covered": regions_covered,
+                    "covered_regions": covered_list,
                     "next_action": "Prepare GIS data: python manage.py "
                     "prepare_gis_data --area italy --verbose --force",
                 }
@@ -152,8 +193,10 @@ class DatabaseStatusChecker:
             status.update(
                 {
                     "status": "partially_ready",
-                    "message": "Topology exists but routing costs not calculated.",
+                    "message": f"Topology exists"
+                    f" ({road_count:,} segments) but routing costs not calculated.",
                     "road_count": road_count,
+                    "regions_covered": regions_covered,
                     "next_action": "Prepare GIS data: python manage.py "
                     "prepare_gis_data --area italy --verbose --force",
                 }
@@ -165,8 +208,11 @@ class DatabaseStatusChecker:
             status.update(
                 {
                     "status": "ready_without_pois",
-                    "message": "Routing ready but no POIs imported.",
+                    "message": f"Routing ready"
+                    f" ({road_count:,} segments, {regions_covered} "
+                    f"regions) but no POIs imported.",
                     "road_count": road_count,
+                    "regions_covered": regions_covered,
                     "scenic_costs_calculated": scenic_cost_count,
                     "next_action": "Import POIs: python manage.py "
                     "import_osm_pois --area italy --verbose",
@@ -181,6 +227,7 @@ class DatabaseStatusChecker:
                     "status": "ready_without_pois",
                     "message": "Routing ready but POI table is empty.",
                     "road_count": road_count,
+                    "regions_covered": regions_covered,
                     "scenic_costs_calculated": scenic_cost_count,
                     "next_action": "Import POIs: python manage.py "
                     "import_osm_pois --area italy --verbose",
@@ -188,18 +235,19 @@ class DatabaseStatusChecker:
             )
             return status
 
-        # Check if there are  enough POIs for Italy
+        # Check if there are enough POIs
         if poi_count < 1000:
             status.update(
                 {
-                    "status": "insufficient_pois",
-                    "message": f"Only {poi_count:,} POIs found. "
-                    "Italy should have > 10,000.",
+                    "status": "ready_with_limited_pois",
+                    "message": f"Routing ready but only {poi_count:,} POIs found. "
+                    f"Recommended > 10,000 for Italy.",
                     "road_count": road_count,
                     "poi_count": poi_count,
+                    "regions_covered": regions_covered,
                     "scenic_costs_calculated": scenic_cost_count,
-                    "next_action": "Re-import POIs: python manage.py "
-                    "import_osm_pois --area italy --clear --verbose",
+                    "next_action": "Import more POIs: python manage.py "
+                    "import_osm_pois --area italy --verbose",
                 }
             )
             return status
@@ -208,9 +256,13 @@ class DatabaseStatusChecker:
         status.update(
             {
                 "status": "fully_ready",
-                "message": "Database is fully prepared for routing operations.",
+                "message": f"Database is fully prepared for routing operations. "
+                f"{road_count:,} road segments from {regions_covered} regions, "
+                f"{poi_count:,} POIs, scenic costs calculated.",
                 "road_count": road_count,
                 "poi_count": poi_count,
+                "regions_covered": regions_covered,
+                "covered_regions": covered_list,
                 "scenic_costs_calculated": scenic_cost_count,
             }
         )
@@ -219,7 +271,7 @@ class DatabaseStatusChecker:
 
 
 class RoadImportManager:
-    """Manager for road imports."""
+    """Manager for regional road imports."""
 
     def __init__(self, area: str):
         """Initialize the RoadImportManager."""
@@ -227,10 +279,33 @@ class RoadImportManager:
         self.imported = False
         self.road_count_before = 0
         self.road_count_after = 0
+        self.regions_to_import = []
 
-    def needs_import(self, force: bool, current_status: str) -> bool:
+    def _get_regions_to_import(self, test_mode: bool = False) -> list[str]:
+        """Determine which regions to import based on area and mode."""
+        if test_mode:
+            return ["test"]
+
+        area_lower = self.area.lower()
+
+        if area_lower == "italy" or area_lower == "all":
+            # Import only initial regions, not all
+            return OSMConfig.INITIAL_REGIONS
+        elif area_lower in OSMConfig.REGION_BBOXES:
+            return [area_lower]
+        else:
+            # Try to match partial region name
+            matching_regions = [r for r in OSMConfig.INITIAL_REGIONS if area_lower in r]
+            return (
+                matching_regions if matching_regions else OSMConfig.INITIAL_REGIONS[:1]
+            )
+
+    def needs_import(
+        self, force: bool, current_status: str, test_mode: bool = False
+    ) -> bool:
         """Determine if road import is needed."""
         self.road_count_before = RoadSegment.objects.count()
+        self.regions_to_import = self._get_regions_to_import(test_mode)
 
         if force:
             return True
@@ -238,27 +313,47 @@ class RoadImportManager:
         if current_status in ["not_ready", "insufficient_data"]:
             return True
 
-        return self.road_count_before < 10000  # Se meno di 10k, reimporta
+        # Lower thresholds for initial setup
+        if self.area.lower() in ["italy", "all"]:
+            return self.road_count_before < 5000  # Need at least 5000 segments
+        else:
+            return self.road_count_before < 1000
 
-    def run_import(self, force: bool) -> bool:
-        """Run road import."""
+    def run_import(self, force: bool, test_mode: bool = False) -> bool:
+        """Run regional road import."""
         try:
-            args = ["import_osm_roads", "--area", self.area, "--verbose"]
+            if test_mode:
+                args = ["import_osm_roads", "--test-only", "--verbose"]
+            elif (
+                len(self.regions_to_import) == 1 and self.regions_to_import[0] != "test"
+            ):
+                # Single region
+                args = [
+                    "import_osm_roads",
+                    "--regions",
+                    self.regions_to_import[0],
+                    "--verbose",
+                ]
+            else:
+                # Multiple initial regions
+                regions_arg = ",".join(self.regions_to_import)
+                args = [
+                    "import_osm_roads",
+                    "--regions",
+                    regions_arg,
+                    "--sequential",
+                    "--verbose",
+                ]
+
             if force:
                 args.append("--clear")
 
+            logger.info(f"Running road import with args: {args}")
             call_command(*args)
             self.imported = True
             self.road_count_after = RoadSegment.objects.count()
+
             logger.info(f"Road import completed: {self.road_count_after:,} segments")
-            if self.road_count_after < 10000 and self.area == "italy":
-                logger.warning(
-                    f"Warning: Only {self.road_count_after:,}"
-                    f" segments imported for Italy"
-                )
-                logger.warning(
-                    "Expected > 100,000 segments. The import may have failed."
-                )
 
             return True
         except Exception as e:
@@ -272,11 +367,12 @@ class RoadImportManager:
             "road_count_before": self.road_count_before,
             "road_count_after": self.road_count_after,
             "roads_added": self.road_count_after - self.road_count_before,
+            "regions_imported": self.regions_to_import,
         }
 
 
 class POIImportManager:
-    """Manager for POI imports."""
+    """Manager for POI imports using environment configuration."""
 
     def __init__(self, area: str):
         """Initialize the POIImportManager."""
@@ -285,7 +381,9 @@ class POIImportManager:
         self.poi_count_before = 0
         self.poi_count_after = 0
 
-    def needs_import(self, force: bool, skip_pois: bool, current_status: str) -> bool:
+    def needs_import(
+        self, force: bool, skip_pois: bool, current_status: str, test_mode: bool = False
+    ) -> bool:
         """Determine if POI import is needed."""
         if skip_pois:
             return False
@@ -297,40 +395,44 @@ class POIImportManager:
 
         if current_status in [
             "ready_without_pois",
+            "ready_with_limited_pois",
             "not_ready",
             "partially_ready",
-            "insufficient_pois",
             "insufficient_data",
         ]:
             return True
 
-        # if there are few, re-import
-        return self.poi_count_before < 1000
+        # For test mode, we need fewer POIs
+        if test_mode:
+            return self.poi_count_before < 100
+        else:
+            return self.poi_count_before < 1000
 
-    def run_import(self, force: bool) -> bool:
-        """Run POI import."""
+    def run_import(self, force: bool, test_mode: bool = False) -> bool:
+        """Run POI import using environment configuration."""
         try:
+            if test_mode:
+                # For test mode, use a small area
+                area = "test"
+                categories = "viewpoint,restaurant"
+            else:
+                area = self.area
+                categories = "viewpoint,restaurant,church,historic"
+
             args = [
                 "import_osm_pois",
                 "--area",
-                self.area,
+                area,
                 "--categories",
-                "viewpoint,restaurant,church,historic",
+                categories,
                 "--verbose",
             ]
-            if force:
-                args.append("--clear")
 
+            logger.info(f"Running POI import with args: {args}")
             call_command(*args)
             self.imported = True
             self.poi_count_after = PointOfInterest.objects.count()
             logger.info(f"POI import completed: {self.poi_count_after:,} points")
-
-            if self.poi_count_after < 1000 and self.area == "italy":
-                logger.warning(
-                    f"Warning: Only {self.poi_count_after:,} POIs imported for Italy"
-                )
-                logger.warning("Expected > 10,000 POIs.")
 
             return True
         except Exception as e:
@@ -360,15 +462,25 @@ class GISPreparationManager:
         if force:
             return True
 
-        return current_status in ["partially_ready", "insufficient_data"]
+        return current_status in [
+            "partially_ready",
+            "insufficient_data",
+            "ready_without_pois",
+            "ready_with_limited_pois",
+        ]
 
     def run_preparation(self, force: bool) -> bool:
         """Run GIS data preparation."""
         try:
-            args = ["prepare_gis_data", "--area", "italy", "--verbose"]
+            # Get area from environment or use default
+            init_area = os.environ.get("INIT_AREA", "italy")
+            area_to_use = self.area if self.area != "test" else init_area
+
+            args = ["prepare_gis_data", "--area", area_to_use, "--verbose"]
             if force:
                 args.append("--force")
 
+            logger.info(f"Running GIS preparation with args: {args}")
             call_command(*args)
             self.prepared = True
             return True
@@ -384,18 +496,27 @@ class GISPreparationManager:
 
 
 class SetupPipeline:
-    """Main pipeline for database setup."""
+    """Main pipeline for database setup with regional import support."""
 
-    def __init__(self, area: str, force: bool, skip_pois: bool):
+    def __init__(
+        self, area: str, force: bool, skip_pois: bool, test_mode: bool = False
+    ):
         """Initialize the SetupPipeline."""
         self.area = area
         self.force = force
         self.skip_pois = skip_pois
+        self.test_mode = test_mode
+
+        # Adjust area for test mode
+        if test_mode:
+            self.effective_area = "test"
+        else:
+            self.effective_area = area
 
         self.status_checker = DatabaseStatusChecker()
-        self.road_import_manager = RoadImportManager(area)
-        self.poi_import_manager = POIImportManager(area)
-        self.gis_preparation_manager = GISPreparationManager(area)
+        self.road_import_manager = RoadImportManager(self.effective_area)
+        self.poi_import_manager = POIImportManager(self.effective_area)
+        self.gis_preparation_manager = GISPreparationManager(self.effective_area)
 
         self.stats = {
             "initial_status": None,
@@ -403,22 +524,30 @@ class SetupPipeline:
             "steps_completed": [],
             "step_details": {},
             "errors": [],
+            "test_mode": test_mode,
+            "area": self.effective_area,
         }
 
     def check_initial_status(self):
         """Check initial database status."""
         self.stats["initial_status"] = self.status_checker.check_status()
-        logger.info(f"Initial status: {self.stats['initial_status']['status']}")
+        status_info = self.stats["initial_status"]
+        logger.info(f"Initial status: {status_info['status']}")
 
     def run_road_import(self) -> bool:
         """Run road import if needed."""
         current_status = self.stats["initial_status"]["status"]
 
-        if self.road_import_manager.needs_import(self.force, current_status):
-            self.stats["steps_completed"].append("Starting road import...")
+        if self.road_import_manager.needs_import(
+            self.force, current_status, self.test_mode
+        ):
+            if self.test_mode:
+                logger.info("Starting test road import...")
+            else:
+                logger.info("Starting regional road import...")
 
-            if self.road_import_manager.run_import(self.force):
-                self.stats["steps_completed"].append("Road import completed")
+            if self.road_import_manager.run_import(self.force, self.test_mode):
+                logger.info("Road import completed")
                 self.stats["step_details"][
                     "roads"
                 ] = self.road_import_manager.get_stats()
@@ -428,9 +557,7 @@ class SetupPipeline:
                 return False
         else:
             road_count = self.road_import_manager.road_count_before
-            self.stats["steps_completed"].append(
-                f"Roads already exist: {road_count:,} segments"
-            )
+            logger.info(f"Roads already exist: {road_count:,} segments")
             return True
 
     def run_poi_import(self) -> bool:
@@ -438,12 +565,15 @@ class SetupPipeline:
         current_status = self.stats["initial_status"]["status"]
 
         if self.poi_import_manager.needs_import(
-            self.force, self.skip_pois, current_status
+            self.force, self.skip_pois, current_status, self.test_mode
         ):
-            self.stats["steps_completed"].append("Starting POI import...")
+            if self.test_mode:
+                logger.info("Starting test POI import...")
+            else:
+                logger.info("Starting POI import...")
 
-            if self.poi_import_manager.run_import(self.force):
-                self.stats["steps_completed"].append("POI import completed")
+            if self.poi_import_manager.run_import(self.force, self.test_mode):
+                logger.info("POI import completed")
                 self.stats["step_details"]["pois"] = self.poi_import_manager.get_stats()
                 return True
             else:
@@ -451,9 +581,7 @@ class SetupPipeline:
                 return False
         else:
             poi_count = self.poi_import_manager.poi_count_before
-            self.stats["steps_completed"].append(
-                f"POIs already exist: {poi_count:,} points"
-            )
+            logger.info(f"POIs already exist: {poi_count:,} points")
             return True
 
     def run_gis_preparation(self) -> bool:
@@ -461,10 +589,10 @@ class SetupPipeline:
         current_status = self.stats["initial_status"]["status"]
 
         if self.gis_preparation_manager.needs_preparation(self.force, current_status):
-            self.stats["steps_completed"].append("Preparing GIS data...")
+            logger.info("Preparing GIS data...")
 
             if self.gis_preparation_manager.run_preparation(self.force):
-                self.stats["steps_completed"].append("GIS data preparation completed")
+                logger.info("GIS data preparation completed")
                 self.stats["step_details"][
                     "gis"
                 ] = self.gis_preparation_manager.get_stats()
@@ -473,13 +601,14 @@ class SetupPipeline:
                 self.stats["errors"].append("GIS preparation failed")
                 return False
         else:
-            self.stats["steps_completed"].append("GIS data already prepared")
+            logger.info("GIS data already prepared")
             return True
 
     def check_final_status(self):
         """Check final database status."""
         self.stats["final_status"] = self.status_checker.check_status()
-        logger.info(f"Final status: {self.stats['final_status']['status']}")
+        final_status = self.stats["final_status"]
+        logger.info(f"Final status: {final_status['status']}")
 
     def run(self) -> dict[str, Any]:
         """Run the complete setup pipeline."""
@@ -489,16 +618,19 @@ class SetupPipeline:
             # Check initial status
             self.check_initial_status()
 
-            # Import roads
+            # Import roads (always needed for routing)
             if not self.run_road_import():
+                logger.error("Road import step failed")
                 return result
 
             # Import POIs (if not skipped)
             if not self.skip_pois and not self.run_poi_import():
-                return result
+                logger.error("POI import step failed")
+                # Continue anyway, as routing can work without POIs
 
-            # Prepare GIS data
+            # Prepare GIS data (critical for routing)
             if not self.run_gis_preparation():
+                logger.error("GIS preparation step failed")
                 return result
 
             # Check final status
@@ -510,15 +642,16 @@ class SetupPipeline:
         except Exception as e:
             self.stats["errors"].append(str(e))
             logger.error(f"Setup pipeline error: {e}")
-            logger.error(traceback.format_exc())
 
         return result
 
 
 class Command(BaseCommand):
-    """Command for database setup."""
+    """Command for database setup with regional import support."""
 
-    help = "Check and setup database for scenic routing operations"
+    help = (
+        "Check and setup database for scenic routing operations with regional imports"
+    )
 
     def add_arguments(self, parser):
         """Add command arguments."""
@@ -533,8 +666,8 @@ class Command(BaseCommand):
         parser.add_argument(
             "--area",
             type=str,
-            default="italy",
-            help="Geographic area to import (default: italy)",
+            default=None,
+            help="Geographic area to import",
         )
         parser.add_argument("--skip-pois", action="store_true", help="Skip POI import")
         parser.add_argument(
@@ -543,25 +676,66 @@ class Command(BaseCommand):
         parser.add_argument(
             "--test-mode", action="store_true", help="Run in test mode (small imports)"
         )
+        parser.add_argument(
+            "--regions-only",
+            action="store_true",
+            help="Import only roads (regions) without POIs or GIS preparation",
+        )
+        parser.add_argument(
+            "--pois-only",
+            action="store_true",
+            help="Import only POIs without roads or GIS preparation",
+        )
 
     def setup_logging(self, verbose: bool):
         """Setup logging based on verbosity."""
         if verbose:
-            logging.basicConfig(level=logging.INFO)
+            logging.basicConfig(
+                level=logging.DEBUG,
+                format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            )
         else:
-            logging.basicConfig(level=logging.WARNING)
+            logging.basicConfig(
+                level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+            )
 
-    def display_header(self, area: str):
+    def get_target_area(self, options) -> str:
+        """Determine the target area for import."""
+        # Priority: command argument > environment variable > default
+        if options["area"]:
+            return options["area"]
+
+        env_area = os.environ.get("INIT_AREA")
+        if env_area:
+            return env_area
+
+        return "italy"
+
+    def display_header(
+        self, area: str, test_mode: bool, regions_only: bool, pois_only: bool
+    ):
         """Display command header."""
-        self.stdout.write("=" * 60)
-        self.stdout.write("Database Setup for Scenic Routing")
-        self.stdout.write("=" * 60)
-        self.stdout.write(f"\nArea: {area}")
-        self.stdout.write("-" * 40)
+        self.stdout.write("=" * 70)
+        self.stdout.write("DATABASE SETUP FOR SCENIC ROUTING - REGIONAL IMPORT")
+        self.stdout.write("=" * 70)
+
+        if test_mode:
+            self.stdout.write(self.style.WARNING("TEST MODE ENABLED"))
+
+        self.stdout.write(f"\nTarget Area: {area.upper()}")
+
+        if regions_only:
+            self.stdout.write("Mode: Regions import only (roads)")
+        elif pois_only:
+            self.stdout.write("Mode: POIs import only")
+        else:
+            self.stdout.write("Mode: Full setup")
+
+        self.stdout.write("-" * 70)
 
     def display_status_check(self, status: dict[str, Any]):
         """Display database status check results."""
-        self.stdout.write(f"\nDatabase Status: {status['status'].upper()}")
+        self.stdout.write(f"\nDATABASE STATUS: {status['status'].upper()}")
         self.stdout.write(f"Message: {status['message']}")
 
         if "road_count" in status:
@@ -570,113 +744,221 @@ class Command(BaseCommand):
         if "poi_count" in status:
             self.stdout.write(f"POIs: {status['poi_count']:,}")
 
+        if "regions_covered" in status and status["regions_covered"] > 0:
+            self.stdout.write(f"Regions covered: {status['regions_covered']}")
+            if "covered_regions" in status and status["covered_regions"]:
+                self.stdout.write(
+                    f"Covered regions: {', '.join(status['covered_regions'][:5])}"
+                )
+                if len(status["covered_regions"]) > 5:
+                    self.stdout.write(
+                        f"  ... and {len(status['covered_regions']) - 5} more"
+                    )
+
         if "scenic_costs_calculated" in status:
             self.stdout.write(
                 f"Scenic costs calculated: {status['scenic_costs_calculated']:,}"
             )
 
         if "next_action" in status:
-            self.stdout.write(f"\nNext action: {status['next_action']}")
-
-    def display_setup_progress(self, step: str):
-        """Display setup progress."""
-        self.stdout.write(f"\n{step}")
+            self.stdout.write(f"\nRecommended action: {status['next_action']}")
 
     def display_setup_results(self, result: dict[str, Any]):
         """Display setup results."""
         stats = result["stats"]
 
-        self.stdout.write("\n" + "=" * 60)
+        self.stdout.write("\n" + "=" * 70)
 
         if result["success"]:
             self.stdout.write(
-                self.style.SUCCESS("Database setup completed successfully!")
+                self.style.SUCCESS("✓ DATABASE SETUP COMPLETED SUCCESSFULLY!")
+            )
+        else:
+            self.stdout.write(self.style.ERROR("✗ DATABASE SETUP FAILED!"))
+
+        # Display test mode info
+        if stats.get("test_mode"):
+            self.stdout.write(
+                self.style.WARNING("\n[TEST MODE] - Limited data imported")
             )
 
-            # Display completed steps
-            if stats["steps_completed"]:
+        # Display completed steps
+        if stats["steps_completed"]:
+            self.stdout.write(f"\nSteps completed ({len(stats['steps_completed'])}):")
+            for step in stats["steps_completed"]:
+                self.stdout.write(f"  ✓ {step}")
+
+        # Display step details
+        if stats.get("step_details"):
+            self.stdout.write("\nDetails:")
+
+            if "roads" in stats["step_details"]:
+                road_stats = stats["step_details"]["roads"]
+                if road_stats.get("imported"):
+                    self.stdout.write(
+                        f"Roads:" f" {road_stats.get('road_count_after', 0):,} segments"
+                    )
+                    if road_stats.get("roads_added", 0) > 0:
+                        self.stdout.write(
+                            f"Added:"
+                            f" {road_stats.get('roads_added', 0):,} new segments"
+                        )
+                    if road_stats.get("regions_imported"):
+                        self.stdout.write(
+                            f"Regions: {', '.join(road_stats['regions_imported'][:3])}"
+                        )
+                        if len(road_stats["regions_imported"]) > 3:
+                            self.stdout.write(
+                                f"{len(road_stats['regions_imported']) - 3} more"
+                            )
+
+            if "pois" in stats["step_details"]:
+                poi_stats = stats["step_details"]["pois"]
+                if poi_stats.get("imported"):
+                    self.stdout.write(
+                        f"  POIs: {poi_stats.get('poi_count_after', 0):,} points"
+                    )
+                    if poi_stats.get("pois_added", 0) > 0:
+                        self.stdout.write(
+                            f"    Added: {poi_stats.get('pois_added', 0):,} new points"
+                        )
+
+            if "gis" in stats["step_details"]:
+                gis_stats = stats["step_details"]["gis"]
+                if gis_stats.get("prepared"):
+                    self.stdout.write("  GIS: Data prepared for routing")
+
+        # Display final status
+        if stats.get("final_status"):
+            final = stats["final_status"]
+            self.stdout.write(f"\nFinal Status: {final['status'].upper()}")
+            self.stdout.write(f"{final['message']}")
+
+            if "road_count" in final:
+                self.stdout.write(f"Road segments: {final['road_count']:,}")
+
+            if "poi_count" in final:
+                self.stdout.write(f"POIs: {final['poi_count']:,}")
+
+            if "regions_covered" in final and final["regions_covered"] > 0:
                 self.stdout.write(
-                    f"\nSteps completed ({len(stats['steps_completed'])}):"
+                    f"Italian regions covered: {final['regions_covered']}/20"
                 )
-                for step in stats["steps_completed"]:
-                    self.stdout.write(f"{step}")
 
-            # Display final status
-            if stats["final_status"]:
-                final = stats["final_status"]
-                self.stdout.write(f"\nFinal Status: {final['status'].upper()}")
-                self.stdout.write(f"{final['message']}")
+            if "scenic_costs_calculated" in final:
+                self.stdout.write(
+                    f"Scenic costs calculated: {final['scenic_costs_calculated']:,}"
+                )
 
-                if "road_count" in final:
-                    self.stdout.write(f"Road segments: {final['road_count']:,}")
+        # Display errors
+        if stats["errors"]:
+            self.stdout.write(f"\nErrors encountered ({len(stats['errors'])}):")
+            for error in stats["errors"]:
+                self.stdout.write(f"  ✗ {error}")
 
-                if "poi_count" in final:
-                    self.stdout.write(f"POIs: {final['poi_count']:,}")
+        # Display recommendations
+        self.stdout.write("\n" + "-" * 70)
 
-                if "scenic_costs_calculated" in final:
-                    self.stdout.write(
-                        f"Scenic costs: {final['scenic_costs_calculated']:,}"
+        if result["success"]:
+            final_status = stats.get("final_status", {}).get("status", "")
+
+            if final_status == "fully_ready":
+                self.stdout.write(
+                    self.style.SUCCESS("READY: System is fully operational!")
+                )
+                self.stdout.write(
+                    "You can now start the server and use the routing API."
+                )
+            elif final_status == "ready_with_limited_pois":
+                self.stdout.write(
+                    self.style.WARNING(
+                        "READY: System operational but with limited POIs."
                     )
-
+                )
+                self.stdout.write(
+                    "Consider importing more POIs for better scenic routing."
+                )
+            elif final_status == "ready_without_pois":
+                self.stdout.write(
+                    self.style.WARNING("READY: Routing works but without POIs.")
+                )
+                self.stdout.write("Run without --skip-pois to import POIs.")
+            elif final_status == "partially_ready":
+                self.stdout.write(
+                    self.style.WARNING("PARTIAL: Some steps may need attention.")
+                )
+                self.stdout.write("Check the details above for recommendations.")
         else:
-            self.stdout.write(self.style.ERROR("Database setup failed!"))
+            self.stdout.write(self.style.ERROR("NOT READY: Setup failed."))
+            self.stdout.write(
+                "Check the errors above and try again with --verbose flag."
+            )
 
-            if stats["errors"]:
-                self.stdout.write(f"\nErrors encountered ({len(stats['errors'])}):")
-                for error in stats["errors"]:
-                    self.stdout.write(f"  ✗ {error}")
-
-            # Display partial statistics if available
-            if stats.get("step_details"):
-                self.stdout.write("\nPartial results:")
-                if "roads" in stats["step_details"]:
-                    road_stats = stats["step_details"]["roads"]
-                    self.stdout.write(
-                        f"  Roads: {road_stats.get('road_count_after', 0):,}"
-                    )
-
-                if "pois" in stats["step_details"]:
-                    poi_stats = stats["step_details"]["pois"]
-                    self.stdout.write(
-                        f"  POIs: {poi_stats.get('poi_count_after', 0):,}"
-                    )
-
-        self.stdout.write("=" * 60)
+        self.stdout.write("=" * 70)
 
     def handle(self, *args, **options):
         """Handle command execution."""
         # Setup logging
         self.setup_logging(options["verbose"])
 
-        # Display header
-        self.display_header(options["area"])
+        # Get target area
+        target_area = self.get_target_area(options)
 
-        # Create status checker
-        status_checker = DatabaseStatusChecker()
+        # Display header
+        self.display_header(
+            target_area,
+            options["test_mode"],
+            options["regions_only"],
+            options["pois_only"],
+        )
 
         # Check-only mode
         if options["check_only"]:
+            status_checker = DatabaseStatusChecker()
             status = status_checker.check_status()
             self.display_status_check(status)
             return
 
-        # Setup mode
-        self.stdout.write(f"\nStarting database setup for area: {options['area']}...")
-
-        # Adjust area for test mode
-        area = options["area"]
-        if options["test_mode"]:
-            area = "test"
-            self.stdout.write(
-                self.style.WARNING(
-                    f"Test mode enabled, using area:"
-                    f" {area} instead of {options['area']}"
+        # Special modes
+        if options["regions_only"]:
+            # Import only regions/roads
+            self.stdout.write(f"\nImporting roads for area: {target_area}...")
+            road_manager = RoadImportManager(target_area)
+            if road_manager.run_import(options["force"], options["test_mode"]):
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        f"✓ Imported {road_manager.road_count_after:,} road segments"
+                    )
                 )
-            )
+                return
+            else:
+                self.stdout.write(self.style.ERROR("✗ Road import failed"))
+                raise SystemExit(1)
+
+        elif options["pois_only"]:
+            # Import only POIs
+            self.stdout.write(f"\nImporting POIs for area: {target_area}...")
+            poi_manager = POIImportManager(target_area)
+            if poi_manager.run_import(options["force"], options["test_mode"]):
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        f"✓ Imported {poi_manager.poi_count_after:,} POIs"
+                    )
+                )
+                return
+            else:
+                self.stdout.write(self.style.ERROR("✗ POI import failed"))
+                raise SystemExit(1)
+
+        # Full setup mode
+        self.stdout.write(f"\nStarting full database setup for area: {target_area}...")
 
         # Run setup pipeline
         pipeline = SetupPipeline(
-            area=area, force=options["force"], skip_pois=options["skip_pois"]
+            area=target_area,
+            force=options["force"],
+            skip_pois=options["skip_pois"],
+            test_mode=options["test_mode"],
         )
 
         result = pipeline.run()

@@ -29,23 +29,10 @@ services:
         condition: service_healthy
     command: >
       sh -c "
-        echo 'Waiting for database...' &&
-        sleep 10 &&
-
-        echo 'Running migrations...' &&
-        python manage.py migrate &&
-
-        echo 'Importing Italian roads (this will take 30-60 minutes)...' &&
-        python manage.py import_osm_roads --area italy --clear --verbose &&
-
-        echo 'Importing POIs...' &&
-        python manage.py import_osm_pois --area italy --verbose &&
-
-        echo 'Preparing GIS data...' &&
-        python manage.py prepare_gis_data --area italy --verbose --force &&
-
-        echo 'Starting server...' &&
-        python manage.py runserver 0.0.0.0:8000
+        sleep 5;
+        python manage.py migrate --no-input;
+        python manage.py load_operational_dataset;
+        python manage.py runserver 0.0.0.0:8000;
       "
     environment:
       DB_HOST: ${DB_HOST}
@@ -60,7 +47,8 @@ services:
       OSM_URL_CH: ${OSM_URL_CH}
       LOCAL_PATH1: ${LOCAL_PATH1}
       LOCAL_PATH2: ${LOCAL_PATH2}
-      INIT_AREA: "italy"
+      INIT_AREA: italy
       NOMINATIM_URL: ${NOMINATIM_URL}
+
 volumes:
   pgdata:
