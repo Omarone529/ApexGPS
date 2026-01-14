@@ -7,11 +7,13 @@ from django.core.management import call_command
 from django.core.management.base import BaseCommand
 from django.db import connection, reset_queries
 
+from gis_data.models import PointOfInterest, RoadSegment
+
 logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
-    """Command class."""
+    """Import Italian regions with optimized memory usage."""
 
     help = "Import all Italian regions with optimized memory usage"
 
@@ -39,7 +41,7 @@ class Command(BaseCommand):
     ]
 
     def add_arguments(self, parser):
-        """Add arguments to parser."""
+        """Add command line arguments."""
         parser.add_argument(
             "--skip-existing",
             action="store_true",
@@ -76,32 +78,21 @@ class Command(BaseCommand):
         )
 
     def _check_memory_usage(self, threshold_mb):
+        """Check if memory usage exceeds threshold."""
         process = psutil.Process()
         mem_mb = process.memory_info().rss / 1024 / 1024
         return mem_mb > threshold_mb
 
     def _force_memory_cleanup(self):
+        """Force memory cleanup and cache clearing."""
         reset_queries()
         gc.collect()
         from django.core.cache import cache
 
         cache.clear()
 
-    def handle(self, *args, **options):
-        """Handle start time."""
-        start_time = time.time()
-
-        if options["minimal"]:
-            self.stdout.write("Loading minimal dataset (Umbria only)...")
-            self._load_minimal_dataset(options)
-        else:
-            self.stdout.write("Loading complete Italy dataset (20 regions)...")
-            self._load_full_italy_optimized(options)
-
-        total_time = time.time() - start_time
-        self._print_summary(total_time, options)
-
     def _load_minimal_dataset(self, options):
+        """Load minimal dataset (Umbria only)."""
         if self._check_memory_usage(options["memory_limit_mb"]):
             self._force_memory_cleanup()
 
@@ -124,6 +115,7 @@ class Command(BaseCommand):
             self._force_memory_cleanup()
 
     def _load_full_italy_optimized(self, options):
+        """Load all 20 Italian regions in optimized batches."""
         total_regions_imported = 0
         total_segments = 0
         failed_regions = []
@@ -143,10 +135,10 @@ class Command(BaseCommand):
                         self._force_memory_cleanup()
 
                     if options["skip_existing"]:
-                        from gis_data.models import RoadSegment
-
-                        existing = RoadSegment.objects.filter(region=region).count()
-                        if existing > 100:
+                        existing = RoadSegment.objects.filter(
+                            osm_id__isnull=False
+                        ).count()
+                        if existing > 1000:  # Reasonable threshold
                             self.stdout.write(
                                 f"  Skipping {region} ({existing} segments exist)"
                             )
@@ -154,13 +146,10 @@ class Command(BaseCommand):
                             continue
 
                     self.stdout.write(f"  Importing {region}...")
-
                     call_command("import_osm_roads", regions=region, verbose=True)
                     self._force_memory_cleanup()
 
-                    from gis_data.models import RoadSegment
-
-                    count = RoadSegment.objects.filter(region=region).count()
+                    count = RoadSegment.objects.filter(osm_id__isnull=False).count()
                     total_segments += count
                     batch_segments += count
                     total_regions_imported += 1
@@ -227,11 +216,10 @@ class Command(BaseCommand):
                 self._force_memory_cleanup()
 
             poi_time = time.time() - poi_start
-            from gis_data.models import PointOfInterest
-
             poi_count = PointOfInterest.objects.count()
             self.stdout.write(f"{poi_count:,} POIs imported in {poi_time:.1f}s")
 
+        # Save stats
         self.stats = {
             "total_regions_imported": total_regions_imported,
             "total_segments": total_segments,
@@ -239,6 +227,7 @@ class Command(BaseCommand):
         }
 
     def _print_summary(self, total_time, options):
+        """Print import summary."""
         from gis_data.models import PointOfInterest, RoadSegment
 
         road_count = RoadSegment.objects.count()
@@ -266,3 +255,17 @@ class Command(BaseCommand):
 
         self.stdout.write("System ready with complete Italy dataset")
         self.stdout.write("=" * 60)
+
+    def handle(self, *args, **options):
+        """Execute the command."""
+        start_time = time.time()
+
+        if options["minimal"]:
+            self.stdout.write("Loading minimal dataset (Umbria only)...")
+            self._load_minimal_dataset(options)
+        else:
+            self.stdout.write("Loading complete Italy dataset (20 regions)...")
+            self._load_full_italy_optimized(options)
+
+        total_time = time.time() - start_time
+        self._print_summary(total_time, options)
