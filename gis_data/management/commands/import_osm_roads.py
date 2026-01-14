@@ -18,10 +18,10 @@ logger = logging.getLogger(__name__)
 
 
 class RegionalRoadImporter:
-    """Import all regions in OSM."""
+    """Import OSM data for regions."""
 
     def __init__(self, batch_size=1000):
-        """Init RegionalRoadImporter."""
+        """Initialize importer."""
         self.api_client = OSMAPIClient()
         self.total_segments_imported = 0
         self.batch_size = batch_size
@@ -29,11 +29,10 @@ class RegionalRoadImporter:
     def import_region(
         self, region_name: str, clear_existing: bool = False
     ) -> dict[str, Any]:
-        """Import a region."""
+        """Import roads for a specific region."""
         logger.info(f"Importing roads for: {region_name}")
 
         bbox = OSMConfig.REGION_BBOXES.get(region_name.lower(), OSMConfig.ITALY_BBOX)
-
         if region_name.lower() == "test":
             query = OSMQueryBuilder.build_simple_test_query(bbox)
         else:
@@ -65,8 +64,6 @@ class RegionalRoadImporter:
         segments = []
         ways_processed = 0
         ways_with_geometry = 0
-
-        # Process in batches
         for i, element in enumerate(elements):
             if element.get("type") == "way":
                 ways_processed += 1
@@ -75,6 +72,7 @@ class RegionalRoadImporter:
                     ways_with_geometry += 1
                     segment = RoadDataProcessor.create_road_segment(element)
                     if segment:
+                        segment.region = region_name
                         segments.append(segment)
 
                 # Save batch when full
@@ -126,7 +124,7 @@ class RegionalRoadImporter:
     def _save_segments_batch(
         self, segments: list, region_name: str, clear_existing: bool
     ) -> int:
-        """Save road segments."""
+        """Save a batch of road segments."""
         if clear_existing:
             deleted = RoadSegment.objects.filter(highway__isnull=False).delete()[0]
             logger.info(f"Cleared {deleted} existing road segments")
@@ -158,14 +156,18 @@ class RegionalRoadImporter:
             logger.info(f"Saved {saved} segments individually")
             return saved
 
+    def import_test_only(self) -> dict[str, Any]:
+        """Import test data only."""
+        return self.import_region("test", clear_existing=True)
+
 
 class Command(BaseCommand):
-    """Command class."""
+    """Django command to import OSM roads."""
 
     help = "Import road network from OpenStreetMap for Italian regions"
 
     def add_arguments(self, parser):
-        """Add arguments to parser."""
+        """Add command arguments."""
         parser.add_argument(
             "--regions",
             type=str,
@@ -193,7 +195,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        """Handle function."""
+        """Execute command."""
         if options["verbose"]:
             logging.basicConfig(level=logging.DEBUG)
         else:
@@ -217,7 +219,7 @@ class Command(BaseCommand):
         self._display_results(result)
 
     def _import_all_regions(self, importer, clear_first):
-        """Import all italian regions."""
+        """Import all Italian regions."""
         successful_regions = []
         failed_regions = []
 
@@ -243,6 +245,7 @@ class Command(BaseCommand):
         }
 
     def _import_specific_regions(self, importer, regions, clear_first):
+        """Import specific regions."""
         successful_regions = []
         failed_regions = []
         total_segments = 0
@@ -267,6 +270,7 @@ class Command(BaseCommand):
         }
 
     def _display_results(self, result: dict[str, Any]):
+        """Display import results."""
         if result.get("success"):
             self.stdout.write("Import successful")
 
