@@ -16,7 +16,6 @@ services:
       interval: 10s
       timeout: 10s
       retries: 20
-
   web:
     build: .
     volumes:
@@ -31,7 +30,7 @@ services:
       sh -c "
         sleep 5;
         python manage.py migrate --no-input;
-        python manage.py load_operational_dataset;
+        python manage.py load_operational_dataset
         python manage.py runserver 0.0.0.0:8000;
       "
     environment:
@@ -49,6 +48,7 @@ services:
       LOCAL_PATH2: ${LOCAL_PATH2}
       INIT_AREA: italy
       NOMINATIM_URL: ${NOMINATIM_URL}
-
+      PYTHONMALLOC: malloc
+      MALLOC_ARENA_MAX: 2
 volumes:
   pgdata:

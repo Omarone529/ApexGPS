@@ -1,3 +1,4 @@
+import gc
 import logging
 import time
 from typing import Any
@@ -17,21 +18,21 @@ logger = logging.getLogger(__name__)
 
 
 class RegionalRoadImporter:
-    """Imports roads region by region."""
+    """Import OSM data for regions."""
 
-    def __init__(self):
+    def __init__(self, batch_size=1000):
         """Initialize importer."""
         self.api_client = OSMAPIClient()
         self.total_segments_imported = 0
+        self.batch_size = batch_size
 
     def import_region(
         self, region_name: str, clear_existing: bool = False
     ) -> dict[str, Any]:
-        """Import roads for a single region."""
+        """Import roads for a specific region."""
         logger.info(f"Importing roads for: {region_name}")
 
         bbox = OSMConfig.REGION_BBOXES.get(region_name.lower(), OSMConfig.ITALY_BBOX)
-
         if region_name.lower() == "test":
             query = OSMQueryBuilder.build_simple_test_query(bbox)
         else:
@@ -63,8 +64,7 @@ class RegionalRoadImporter:
         segments = []
         ways_processed = 0
         ways_with_geometry = 0
-
-        for element in elements:
+        for i, element in enumerate(elements):
             if element.get("type") == "way":
                 ways_processed += 1
 
@@ -72,27 +72,45 @@ class RegionalRoadImporter:
                     ways_with_geometry += 1
                     segment = RoadDataProcessor.create_road_segment(element)
                     if segment:
+                        segment.region = region_name
                         segments.append(segment)
+
+                # Save batch when full
+                if len(segments) >= self.batch_size:
+                    saved = self._save_segments_batch(
+                        segments, region_name, clear_existing and i == 0
+                    )
+                    self.total_segments_imported += saved
+                    segments = []
+
+                    # Force garbage collection
+                    gc.collect()
 
                 if ways_processed % 1000 == 0:
                     logger.info(
-                        f"Processed {ways_processed} ways,"
-                        f" created {len(segments)} segments"
+                        f"Processed {ways_processed} ways, created"
+                        f" {self.total_segments_imported} segments"
                     )
+
+        # Save remaining segments
+        if segments:
+            saved = self._save_segments_batch(
+                segments, region_name, clear_existing and ways_processed == 0
+            )
+            self.total_segments_imported += saved
+
         logger.info(
             f"Total: processed {ways_processed} ways, "
-            f"{ways_with_geometry} with geometry, created {len(segments)} segments"
+            f"{ways_with_geometry} with geometry, "
+            f"saved {self.total_segments_imported} segments"
         )
 
-        if not segments:
+        if self.total_segments_imported == 0:
             return {
                 "success": False,
                 "region": region_name,
                 "error": "No valid road segments created",
             }
-
-        saved_count = self._save_segments(segments, region_name, clear_existing)
-        self.total_segments_imported += saved_count
 
         return {
             "success": True,
@@ -100,95 +118,56 @@ class RegionalRoadImporter:
             "elements_found": len(elements),
             "ways_processed": ways_processed,
             "ways_with_geometry": ways_with_geometry,
-            "segments_created": len(segments),
-            "segments_saved": saved_count,
+            "segments_saved": self.total_segments_imported,
         }
 
-    def _save_segments(
+    def _save_segments_batch(
         self, segments: list, region_name: str, clear_existing: bool
     ) -> int:
-        """Save segments to database."""
-        try:
-            if clear_existing:
-                deleted = RoadSegment.objects.filter(highway__isnull=False).delete()[0]
-                logger.info(f"Cleared {deleted} existing road segments")
+        """Save a batch of road segments."""
+        if clear_existing:
+            deleted = RoadSegment.objects.filter(highway__isnull=False).delete()[0]
+            logger.info(f"Cleared {deleted} existing road segments")
 
+        if not segments:
+            return 0
+
+        try:
             with transaction.atomic():
                 created_segments = RoadSegment.objects.bulk_create(
                     segments, ignore_conflicts=True, batch_size=1000
                 )
-
             saved_count = len(created_segments)
-            logger.info(f"Saved {saved_count} segments for {region_name}")
+            logger.info(f"Saved batch of {saved_count} segments for {region_name}")
             return saved_count
 
         except Exception as e:
-            logger.error(f"Failed to save segments: {e}")
+            logger.error(f"Failed to save batch: {e}")
+
+            # Fallback: save individually
             saved = 0
-            batch_size = 100
-
-            for i in range(0, len(segments), batch_size):
-                batch = segments[i : i + batch_size]
+            for segment in segments:
                 try:
-                    with transaction.atomic():
-                        RoadSegment.objects.bulk_create(batch, ignore_conflicts=True)
-                    saved += len(batch)
+                    segment.save()
+                    saved += 1
                 except Exception:
-                    for segment in batch:
-                        try:
-                            segment.save()
-                            saved += 1
-                        except Exception:
-                            pass
+                    pass
 
+            logger.info(f"Saved {saved} segments individually")
             return saved
 
     def import_test_only(self) -> dict[str, Any]:
-        """Import only test data."""
-        logger.info("TEST IMPORT ONLY - Small area")
-
-        bbox = (41.89, 12.47, 41.90, 12.48)
-
-        query = f"""
-            [out:json][timeout:180];
-            way["highway"~"primary|secondary|tertiary"]({bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]});
-            out geom;
-        """
-
-        data = self.api_client.execute_query(query)
-        if not data:
-            return {"success": False, "error": "Failed to fetch test data"}
-
-        elements = data.get("elements", [])
-        logger.info(f"Test got {len(elements)} elements")
-
-        segments = []
-        for element in elements:
-            if element.get("type") == "way":
-                segment = RoadDataProcessor.create_road_segment(element)
-                if segment:
-                    segments.append(segment)
-
-        logger.info(f"Created {len(segments)} segments from test")
-
-        if segments:
-            saved = self._save_segments(segments, "test", True)
-            return {
-                "success": True,
-                "segments_saved": saved,
-                "message": f"Imported {saved} test road segments",
-            }
-        else:
-            return {"success": False, "error": "No segments created from test data"}
+        """Import test data only."""
+        return self.import_region("test", clear_existing=True)
 
 
 class Command(BaseCommand):
-    """Import OSM roads for Italian regions."""
+    """Django command to import OSM roads."""
 
     help = "Import road network from OpenStreetMap for Italian regions"
 
     def add_arguments(self, parser):
-        """Add arguments to parser."""
+        """Add command arguments."""
         parser.add_argument(
             "--regions",
             type=str,
@@ -208,15 +187,21 @@ class Command(BaseCommand):
             action="store_true",
             help="Import only minimal test data",
         )
+        parser.add_argument(
+            "--batch-size",
+            type=int,
+            default=1000,
+            help="Batch size for processing (default: 1000)",
+        )
 
     def handle(self, *args, **options):
-        """Handle command execution."""
+        """Execute command."""
         if options["verbose"]:
             logging.basicConfig(level=logging.DEBUG)
         else:
             logging.basicConfig(level=logging.INFO)
 
-        importer = RegionalRoadImporter()
+        importer = RegionalRoadImporter(batch_size=options["batch_size"])
 
         if options["test_only"]:
             result = importer.import_test_only()
@@ -234,7 +219,7 @@ class Command(BaseCommand):
         self._display_results(result)
 
     def _import_all_regions(self, importer, clear_first):
-        """Import all regions."""
+        """Import all Italian regions."""
         successful_regions = []
         failed_regions = []
 
@@ -287,7 +272,7 @@ class Command(BaseCommand):
     def _display_results(self, result: dict[str, Any]):
         """Display import results."""
         if result.get("success"):
-            self.stdout.write(self.style.SUCCESS("Import successful"))
+            self.stdout.write("Import successful")
 
             if "successful_regions" in result:
                 self.stdout.write(
@@ -297,7 +282,7 @@ class Command(BaseCommand):
             if "total_segments" in result:
                 self.stdout.write(f"Segments saved: {result['total_segments']:,}")
         else:
-            self.stdout.write(self.style.ERROR("Import failed"))
+            self.stdout.write("Import failed")
             if "error" in result:
                 self.stdout.write(f"Error: {result['error']}")
 
