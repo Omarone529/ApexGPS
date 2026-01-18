@@ -218,8 +218,8 @@ class RoadDataProcessor:
         return coords
 
     @staticmethod
-    def create_road_segment(way: dict) -> Any:
-        """Create RoadSegment from OSM way."""
+    def create_road_segment(way: dict, region: str = None) -> Any:
+        """Create RoadSegment from OSM way with region."""
         if "id" not in way or way.get("type") != "way":
             return None
 
@@ -248,6 +248,7 @@ class RoadDataProcessor:
                 surface=parsed_tags["surface"],
                 lanes=parsed_tags["lanes"],
                 length_m=length_m,
+                region=region,
             )
 
             return segment
