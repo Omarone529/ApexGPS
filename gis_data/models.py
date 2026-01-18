@@ -67,6 +67,15 @@ class PointOfInterest(models.Model):
         help_text="Identificativo originale da OpenStreetMap",
     )
 
+    region = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        verbose_name="Regione",
+        help_text="Regione italiana di appartenenza",
+        db_index=True,
+    )
+
     elevation = models.FloatField(
         blank=True,
         null=True,
@@ -122,6 +131,7 @@ class PointOfInterest(models.Model):
             models.Index(fields=["osm_id"]),
             models.Index(fields=["is_active"]),
             models.Index(fields=["location"]),
+            models.Index(fields=["region"]),
         ]
         ordering = ["name"]
 
@@ -275,6 +285,15 @@ class RoadSegment(models.Model):
         verbose_name="ID OpenStreetMap",
         db_index=True,
         help_text="Identificativo originale da OpenStreetMap",
+    )
+
+    region = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        verbose_name="Regione",
+        help_text="Regione italiana di appartenenza del segmento",
+        db_index=True,
     )
 
     name = models.CharField(
@@ -461,6 +480,7 @@ class RoadSegment(models.Model):
             models.Index(fields=["poi_density"]),
             models.Index(fields=["is_active"]),
             models.Index(fields=["osm_id"]),
+            models.Index(fields=["region"]),
         ]
         ordering = ["id"]
 
