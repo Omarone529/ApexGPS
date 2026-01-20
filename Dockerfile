@@ -3,6 +3,9 @@ FROM python:3.10-slim
 WORKDIR /app
 
 COPY apt-requirements.sh /usr/local/bin/apt-requirements.sh
+
+RUN sed -i 's/\r$//' /usr/local/bin/apt-requirements.sh
+
 RUN chmod +x /usr/local/bin/apt-requirements.sh
 
 RUN /usr/local/bin/apt-requirements.sh
