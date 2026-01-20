@@ -1,0 +1,11 @@
+db/
+
+.gitignore
+.pre-commit-config.yaml
+apt-requirements.sh
+docker-compose.yml
+pyproject.toml
+README.md
+requirements.txt
+requirements-dev.txt
+ruff.toml

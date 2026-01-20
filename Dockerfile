@@ -8,11 +8,10 @@ RUN /usr/local/bin/install-deps.sh
 WORKDIR /app
 
 COPY requirements.txt .
-COPY requirements-dev.txt .
 
-RUN pip install --no-cache-dir --user -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-ENV PATH="/home/django/.local/bin:${PATH}"
+ENV PATH="~/.local/bin:${PATH}"
 ENV PYTHONPATH="/app:${PYTHONPATH}"
 ENV GDAL_DATA="/usr/share/gdal"
 COPY . .
