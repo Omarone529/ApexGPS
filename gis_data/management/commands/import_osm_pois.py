@@ -9,6 +9,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 
 from gis_data.models import PointOfInterest
+from gis_data.utils.osm_utils import OSMConfig
 
 logger = logging.getLogger(__name__)
 
@@ -264,7 +265,10 @@ class Command(BaseCommand):
         """Get bounding box for area."""
         area = area.lower()
 
-        if area == "test":
+        if area in OSMConfig.REGION_BBOXES:
+            bbox = OSMConfig.REGION_BBOXES[area]
+            return f"{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}"
+        elif area == "test":
             return "41.88,12.47,41.90,12.49"
         elif area == "umbria":
             return "42.5,12.0,43.5,13.5"
