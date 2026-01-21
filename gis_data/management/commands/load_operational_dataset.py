@@ -1,271 +1,334 @@
 import gc
 import logging
-import time
+from typing import Any
 
-import psutil
-from django.core.management import call_command
 from django.core.management.base import BaseCommand
-from django.db import connection, reset_queries
+from django.db import transaction
 
-from gis_data.models import PointOfInterest, RoadSegment
+from gis_data.models import RoadSegment
+from gis_data.utils.osm_utils import (
+    OSMAPIClient,
+    OSMConfig,
+    OSMQueryBuilder,
+    RoadDataProcessor,
+)
 
 logger = logging.getLogger(__name__)
 
 
+class RegionalRoadImporter:
+    """Import OSM data for regions."""
+
+    def __init__(self, batch_size=1000):
+        """Initialize importer."""
+        self.api_client = OSMAPIClient()
+        self.total_segments_imported = 0
+        self.batch_size = batch_size
+
+    def import_region(
+        self, region_name: str, clear_existing: bool = False
+    ) -> dict[str, Any]:
+        """Import roads for a specific region."""
+        logger.info(f"Importing roads for: {region_name}")
+
+        bbox = OSMConfig.REGION_BBOXES.get(region_name.lower(), OSMConfig.ITALY_BBOX)
+        if region_name.lower() == "test":
+            query = OSMQueryBuilder.build_simple_test_query(bbox)
+        else:
+            query = OSMQueryBuilder.build_road_query(bbox)
+
+        data = self.api_client.execute_query(query)
+
+        if not data:
+            return {
+                "success": False,
+                "region": region_name,
+                "error": "Failed to fetch data from OSM",
+            }
+
+        elements = data.get("elements", [])
+        logger.info(f"Got {len(elements)} elements")
+
+        if not elements:
+            return {
+                "success": False,
+                "region": region_name,
+                "error": "No elements found",
+            }
+
+        way_count = sum(1 for e in elements if e.get("type") == "way")
+        node_count = sum(1 for e in elements if e.get("type") == "node")
+        logger.info(f"Elements: {way_count} ways, {node_count} nodes")
+
+        segments = []
+        ways_processed = 0
+        ways_with_geometry = 0
+        for i, element in enumerate(elements):
+            if element.get("type") == "way":
+                ways_processed += 1
+
+                if "geometry" in element and len(element["geometry"]) >= 2:
+                    ways_with_geometry += 1
+                    segment = RoadDataProcessor.create_road_segment(element)
+                    if segment:
+                        segment.region = region_name
+                        segments.append(segment)
+
+                # Save batch when full
+                if len(segments) >= self.batch_size:
+                    saved = self._save_segments_batch(
+                        segments, region_name, clear_existing and i == 0
+                    )
+                    self.total_segments_imported += saved
+                    segments = []
+
+                    # Force garbage collection
+                    gc.collect()
+
+                if ways_processed % 1000 == 0:
+                    logger.info(
+                        f"Processed {ways_processed} ways, created"
+                        f" {self.total_segments_imported} segments"
+                    )
+
+        # Save remaining segments
+        if segments:
+            saved = self._save_segments_batch(
+                segments, region_name, clear_existing and ways_processed == 0
+            )
+            self.total_segments_imported += saved
+
+        logger.info(
+            f"Total: processed {ways_processed} ways, "
+            f"{ways_with_geometry} with geometry, "
+            f"saved {self.total_segments_imported} segments"
+        )
+
+        if self.total_segments_imported == 0:
+            return {
+                "success": False,
+                "region": region_name,
+                "error": "No valid road segments created",
+            }
+
+        return {
+            "success": True,
+            "region": region_name,
+            "elements_found": len(elements),
+            "ways_processed": ways_processed,
+            "ways_with_geometry": ways_with_geometry,
+            "segments_saved": self.total_segments_imported,
+        }
+
+    def _save_segments_batch(
+        self, segments: list, region_name: str, clear_existing: bool
+    ) -> int:
+        """Save a batch of road segments."""
+        if clear_existing:
+            deleted = RoadSegment.objects.filter(highway__isnull=False).delete()[0]
+            logger.info(f"Cleared {deleted} existing road segments")
+
+        if not segments:
+            return 0
+
+        try:
+            with transaction.atomic():
+                created_segments = RoadSegment.objects.bulk_create(
+                    segments, ignore_conflicts=True, batch_size=1000
+                )
+            saved_count = len(created_segments)
+            logger.info(f"Saved batch of {saved_count} segments for {region_name}")
+            return saved_count
+
+        except Exception as e:
+            logger.error(f"Failed to save batch: {e}")
+
+            saved = 0
+            for segment in segments:
+                try:
+                    segment.save()
+                    saved += 1
+                except Exception:
+                    pass
+
+            logger.info(f"Saved {saved} segments individually")
+            return saved
+
+    def import_test_only(self) -> dict[str, Any]:
+        """Import test data only."""
+        return self.import_region("test", clear_existing=True)
+
+
 class Command(BaseCommand):
-    """Import Italian regions with optimized memory usage."""
+    """Django command to import OSM roads."""
 
-    help = "Import all Italian regions with optimized memory usage"
-
-    OPTIMIZED_BATCHES = [
-        ["valle-daosta"],
-        ["molise"],
-        ["umbria"],
-        ["marche"],
-        ["basilicata"],
-        ["abruzzo"],
-        ["friuli-venezia-giulia"],
-        ["liguria"],
-        ["toscana"],
-        ["lazio"],
-        ["sardegna"],
-        ["emilia-romagna"],
-        ["piemonte"],
-        ["veneto"],
-        ["lombardia"],
-        ["sicilia"],
-        ["puglia"],
-        ["calabria"],
-        ["campania"],
-        ["trentino-alto-adige"],
-    ]
+    help = (
+        "Import road network from OpenStreetMap for the next available Italian region"
+    )
 
     def add_arguments(self, parser):
-        """Add command line arguments."""
+        """Add command arguments."""
         parser.add_argument(
-            "--skip-existing",
+            "--force-region",
+            type=str,
+            help="Force import of a specific region",
+        )
+        parser.add_argument(
+            "--clear", action="store_true", help="Clear existing roads before import"
+        )
+        parser.add_argument(
+            "--verbose",
             action="store_true",
-            help="Skip regions that already have data",
-        )
-        parser.add_argument("--skip-pois", action="store_true", help="Skip POI import")
-        parser.add_argument(
-            "--batch-pause",
-            type=int,
-            default=10,
-            help="Seconds to pause between batches (default: 10)",
+            help="Show detailed output",
         )
         parser.add_argument(
-            "--minimal",
+            "--skip-pois",
             action="store_true",
-            help="Load only Umbria region for immediate operation",
+            help="Skip POI import",
         )
         parser.add_argument(
-            "--regions-only",
+            "--skip-gis",
             action="store_true",
-            help="Import only regions, skip POIs and GIS prep",
-        )
-        parser.add_argument(
-            "--memory-limit-mb",
-            type=int,
-            default=1024,
-            help="Memory limit in MB before forced cleanup (default: 1024)",
+            help="Skip GIS preparation",
         )
         parser.add_argument(
             "--batch-size",
             type=int,
             default=1000,
-            help="Batch size for processing segments (default: 1000)",
+            help="Batch size for processing (default: 1000)",
         )
 
-    def _check_memory_usage(self, threshold_mb):
-        """Check if memory usage exceeds threshold."""
-        process = psutil.Process()
-        mem_mb = process.memory_info().rss / 1024 / 1024
-        return mem_mb > threshold_mb
+    def get_next_available_region(self):
+        """Get the first available region that needs importing."""
+        # Get all Italian regions from OSMConfig
+        all_regions = OSMConfig.ALL_REGIONS
 
-    def _force_memory_cleanup(self):
-        """Force memory cleanup and cache clearing."""
-        reset_queries()
-        gc.collect()
-        from django.core.cache import cache
+        # Check each region to see if it has enough data
+        for region in all_regions:
+            # Count existing road segments for this region
+            existing_count = RoadSegment.objects.filter(region=region).count()
 
-        cache.clear()
-
-    def _load_minimal_dataset(self, options):
-        """Load minimal dataset (Umbria only)."""
-        if self._check_memory_usage(options["memory_limit_mb"]):
-            self._force_memory_cleanup()
-
-        call_command("import_osm_roads", regions="umbria", verbose=True)
-        self._force_memory_cleanup()
-
-        if not options["regions_only"]:
-            self.stdout.write("Preparing routing data...")
-            call_command("prepare_gis_data", area="italy", force=True, verbose=True)
-            self._force_memory_cleanup()
-
-        if not options["skip_pois"] and not options["regions_only"]:
-            self.stdout.write("Importing essential POIs...")
-            call_command(
-                "import_osm_pois",
-                area="umbria",
-                categories="viewpoint,restaurant",
-                verbose=True,
-            )
-            self._force_memory_cleanup()
-
-    def _load_full_italy_optimized(self, options):
-        """Load all 20 Italian regions in optimized batches."""
-        total_regions_imported = 0
-        total_segments = 0
-        failed_regions = []
-
-        self.stdout.write("=" * 60)
-        self.stdout.write("IMPORTING ALL 20 ITALIAN REGIONS")
-        self.stdout.write("=" * 60)
-
-        for batch_num, regions in enumerate(self.OPTIMIZED_BATCHES, 1):
-            self.stdout.write(f"\nBatch {batch_num}: {', '.join(regions)}")
-            batch_start = time.time()
-            batch_segments = 0
-
-            for region in regions:
-                try:
-                    if self._check_memory_usage(options["memory_limit_mb"]):
-                        self._force_memory_cleanup()
-
-                    if options["skip_existing"]:
-                        existing = RoadSegment.objects.filter(
-                            osm_id__isnull=False
-                        ).count()
-                        if existing > 1000:  # Reasonable threshold
-                            self.stdout.write(
-                                f"  Skipping {region} ({existing} segments exist)"
-                            )
-                            total_regions_imported += 1
-                            continue
-
-                    self.stdout.write(f"  Importing {region}...")
-                    call_command("import_osm_roads", regions=region, verbose=True)
-                    self._force_memory_cleanup()
-
-                    count = RoadSegment.objects.filter(osm_id__isnull=False).count()
-                    total_segments += count
-                    batch_segments += count
-                    total_regions_imported += 1
-
-                    self.stdout.write(f"  {count:,} segments imported")
-
-                except Exception as e:
-                    error_msg = str(e)[:100]
-                    self.stdout.write(f"  Failed: {error_msg}")
-                    failed_regions.append(region)
-                    continue
-
-            if batch_segments > 0:
-                self.stdout.write("  Optimizing database...")
-                with connection.cursor() as cursor:
-                    cursor.execute("VACUUM ANALYZE gis_data_roadsegment;")
-
-            batch_time = time.time() - batch_start
-            self.stdout.write(f"  Batch completed in {batch_time:.1f}s")
-
-            if batch_num < len(self.OPTIMIZED_BATCHES):
-                pause_time = options["batch_pause"]
-                self.stdout.write(f"  Pausing for {pause_time}s...")
-                time.sleep(pause_time)
-                self._force_memory_cleanup()
-
-        if not options["regions_only"] and total_segments > 0:
-            self.stdout.write("\n" + "=" * 60)
-            self.stdout.write("PREPARING ROUTING DATA")
-            self.stdout.write("=" * 60)
-
-            gis_start = time.time()
-            call_command("prepare_gis_data", area="italy", force=True, verbose=True)
-            self._force_memory_cleanup()
-
-            gis_time = time.time() - gis_start
-            self.stdout.write(f"GIS preparation completed in {gis_time:.1f}s")
-
-        if not options["skip_pois"] and not options["regions_only"]:
-            self.stdout.write("\n" + "=" * 60)
-            self.stdout.write("IMPORTING POIs")
-            self.stdout.write("=" * 60)
-
-            poi_start = time.time()
-            poi_categories = [
-                ("viewpoint,restaurant", "essential"),
-                ("church,historic", "cultural"),
-                ("hospital,police,school", "services"),
-                ("hotel,attraction,museum", "tourism"),
-            ]
-
-            for categories, category_name in poi_categories:
-                self.stdout.write(f"\nImporting {category_name} POIs...")
-
-                if self._check_memory_usage(options["memory_limit_mb"]):
-                    self._force_memory_cleanup()
-
-                call_command(
-                    "import_osm_pois",
-                    area="italy",
-                    categories=categories,
-                    verbose=True,
+            # If less than threshold, this region needs importing
+            if existing_count < 100:  # Threshold for "enough data"
+                logger.info(
+                    f"Region {region} has only {existing_count} segments, needs import"
                 )
-                self._force_memory_cleanup()
+                return region
 
-            poi_time = time.time() - poi_start
-            poi_count = PointOfInterest.objects.count()
-            self.stdout.write(f"{poi_count:,} POIs imported in {poi_time:.1f}s")
-
-        # Save stats
-        self.stats = {
-            "total_regions_imported": total_regions_imported,
-            "total_segments": total_segments,
-            "failed_regions": failed_regions,
-        }
-
-    def _print_summary(self, total_time, options):
-        """Print import summary."""
-        from gis_data.models import PointOfInterest, RoadSegment
-
-        road_count = RoadSegment.objects.count()
-
-        self.stdout.write("\n" + "=" * 60)
-        self.stdout.write("DATASET LOADING COMPLETE")
-        self.stdout.write("=" * 60)
-
-        self.stdout.write(
-            f"Total time: {total_time:.1f}s ({total_time / 60:.1f} minutes)"
-        )
-
-        if hasattr(self, "stats"):
-            successful = self.stats["total_regions_imported"]
-            failed = len(self.stats["failed_regions"])
-            self.stdout.write(f"Regions imported: {successful}/20")
-            if failed > 0:
-                self.stdout.write(f"Failed regions: {failed}")
-
-        self.stdout.write(f"Total road segments: {road_count:,}")
-
-        if not options["skip_pois"] and not options["regions_only"]:
-            poi_count = PointOfInterest.objects.count()
-            self.stdout.write(f"Total POIs: {poi_count:,}")
-
-        self.stdout.write("System ready with complete Italy dataset")
-        self.stdout.write("=" * 60)
+        # If all regions have enough data
+        logger.info("All regions appear to have sufficient data")
+        return None
 
     def handle(self, *args, **options):
-        """Execute the command."""
-        start_time = time.time()
-
-        if options["minimal"]:
-            self.stdout.write("Loading minimal dataset (Umbria only)...")
-            self._load_minimal_dataset(options)
+        """Execute command - MODIFICATO per importare solo una regione."""
+        if options["verbose"]:
+            logging.basicConfig(level=logging.DEBUG)
         else:
-            self.stdout.write("Loading complete Italy dataset (20 regions)...")
-            self._load_full_italy_optimized(options)
+            logging.basicConfig(level=logging.INFO)
 
-        total_time = time.time() - start_time
-        self._print_summary(total_time, options)
+        importer = RegionalRoadImporter(batch_size=options["batch_size"])
+
+        # Determine which region to import
+        if options["force_region"]:
+            region_to_import = options["force_region"]
+            self.stdout.write(f"Forcing import of region: {region_to_import}")
+        else:
+            region_to_import = self.get_next_available_region()
+
+            if not region_to_import:
+                self.stdout.write("All Italian regions appear to be already imported.")
+                self.stdout.write(
+                    f"Total road segments in database: {RoadSegment.objects.count():,}"
+                )
+                return
+
+        self.stdout.write(f"Importing region: {region_to_import}")
+
+        # Import roads for this region
+        result = importer.import_region(region_to_import, clear_first=options["clear"])
+
+        if not result["success"]:
+            self.stderr.write(
+                f"Failed to import region {region_to_import}:"
+                f" {result.get('error', 'Unknown error')}"
+            )
+            return
+
+        self.stdout.write(
+            f"Successfully imported {result['segments_saved']:,}"
+            f" road segments for {region_to_import}"
+        )
+
+        # Import POIs for this region (unless skipped)
+        if not options["skip_pois"]:
+            self.stdout.write(f"Importing POIs for {region_to_import}...")
+            from django.core.management import call_command
+
+            try:
+                call_command(
+                    "import_osm_pois",
+                    area=region_to_import,
+                    categories="viewpoint,restaurant,church,historic",
+                    verbose=options["verbose"],
+                )
+                self.stdout.write(f"POIs imported for {region_to_import}")
+            except Exception as e:
+                self.stderr.write(f"Failed to import POIs: {e}")
+
+        # Prepare GIS data (unless skipped)
+        if not options["skip_gis"]:
+            self.stdout.write("Preparing GIS data for routing...")
+            from django.core.management import call_command
+
+            try:
+                call_command(
+                    "prepare_gis_data",
+                    area="italy",  # Use 'italy' to prepare all data
+                    force=True,
+                    verbose=options["verbose"],
+                )
+                self.stdout.write("GIS data prepared for routing")
+            except Exception as e:
+                self.stderr.write(f"Failed to prepare GIS data: {e}")
+
+        # Display final summary
+        self._display_results(result)
+
+    def _display_results(self, result: dict[str, Any]):
+        """Display import results."""
+        total_roads = RoadSegment.objects.count()
+
+        self.stdout.write("\n" + "=" * 60)
+        if result.get("success"):
+            self.stdout.write("IMPORT SUCCESSFUL")
+            self.stdout.write(f"Region: {result['region']}")
+            self.stdout.write(f"Segments saved: {result['segments_saved']:,}")
+        else:
+            self.stdout.write("IMPORT FAILED")
+            if "error" in result:
+                self.stdout.write(f"Error: {result['error']}")
+
+        self.stdout.write(f"Total road segments in database: {total_roads:,}")
+
+        # Check if topology exists
+        from django.db import connection
+
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables
+                        WHERE table_name = 'gis_data_roadsegment_vertices_pgr'
+                    )
+                """
+                )
+                has_topology = cursor.fetchone()[0]
+                self.stdout.write(
+                    f"Routing topology ready: "
+                    f"{'Ready' if has_topology else 'Not ready'}"
+                )
+        except Exception:
+            self.stdout.write("Routing topology:(error checking)")
+
+        self.stdout.write("=" * 60)
