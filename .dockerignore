@@ -1,0 +1,8 @@
+db/
+
+.gitignore
+.pre-commit-config.yaml
+pyproject.toml
+README.md
+requirements-dev.txt
+ruff.toml
