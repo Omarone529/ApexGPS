@@ -19,7 +19,6 @@ services:
   web:
     build: .
     volumes:
-      - .:/app
       - ./dem_data:/dem_data
     ports:
       - "8000:8000"
@@ -28,10 +27,10 @@ services:
         condition: service_healthy
     command: >
       sh -c "
-        sleep 5;
-        python manage.py migrate --no-input;
-        python manage.py load_operational_dataset
-        python manage.py runserver 0.0.0.0:8000;
+        sleep 3 &&
+        python manage.py migrate &&
+        python manage.py load_operational_dataset --verbose &&
+        python manage.py runserver 0.0.0.0:8000
       "
     environment:
       DB_HOST: ${DB_HOST}

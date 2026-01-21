@@ -1,5 +1,6 @@
 import logging
 import sys
+import time
 from typing import Any
 
 from django.core.management.base import BaseCommand
@@ -57,8 +58,8 @@ class DatabaseExtensionManager:
     def verify_required_extensions() -> bool:
         """Verify required PostgreSQL extensions are installed."""
         required_extensions = [
-            ("postgis", True, None),  # Required, no auto-install
-            ("postgis_topology", True, None),  # Required, no auto-install
+            ("postgis", True, None),
+            ("postgis_topology", True, None),
             ("pgrouting", True, DatabaseExtensionManager.install_pgrouting_extension),
         ]
 
@@ -68,18 +69,18 @@ class DatabaseExtensionManager:
             exists, version = DatabaseExtensionManager.check_extension_exists(ext_name)
 
             if exists:
-                logger.info(f"✓ Extension {ext_name} is installed (version {version})")
+                logger.info(f"Extension {ext_name} is installed (version {version})")
                 continue
 
             if required and install_func:
                 if install_func():
-                    logger.info(f"✓ Extension {ext_name} installed successfully")
+                    logger.info(f"Extension {ext_name} installed successfully")
                     continue
                 else:
-                    logger.error(f"✗ Failed to install extension {ext_name}")
+                    logger.error(f"Failed to install extension {ext_name}")
                     all_ok = False
             elif required:
-                logger.error(f"✗ Required extension {ext_name} not installed")
+                logger.error(f"Required extension {ext_name} not installed")
                 all_ok = False
 
         return all_ok
@@ -113,13 +114,6 @@ class RoadDataValidator:
             logger.warning("No road segments found in database")
             return True
 
-        # Consider empty if less than minimum for Italy
-        if count < 1000:
-            logger.warning(
-                f"Only {count:,} road segments found. Expected > 100,000 for Italy."
-            )
-            return True
-
         logger.info(f"Found {count} road segments")
         return False
 
@@ -135,11 +129,9 @@ class RoadDataValidator:
 
         try:
             with connection.cursor() as cursor:
-                # Total count
                 cursor.execute("SELECT COUNT(*) FROM gis_data_roadsegment")
                 summary["total_segments"] = cursor.fetchone()[0]
 
-                # With geometry
                 cursor.execute(
                     "SELECT COUNT(*) FROM gis_data_roadsegment "
                     "WHERE geometry IS NOT NULL"
@@ -149,7 +141,6 @@ class RoadDataValidator:
                     summary["total_segments"] - summary["segments_with_geometry"]
                 )
 
-                # By highway type
                 cursor.execute(
                     """
                     SELECT highway, COUNT(*)
@@ -177,6 +168,8 @@ class RoutingCostCalculator:
         """Calculate accurate geographic lengths for road segments."""
         try:
             with connection.cursor() as cursor:
+                logger.info("Starting to calculate accurate road lengths...")
+                start_time = time.time()
                 cursor.execute(
                     """
                     UPDATE gis_data_roadsegment
@@ -186,7 +179,10 @@ class RoutingCostCalculator:
                 """
                 )
                 updated = cursor.rowcount
-                logger.info(f"Updated length for {updated} segments")
+                elapsed = time.time() - start_time
+                logger.info(
+                    f"Updated length for {updated} segments in {elapsed:.1f} seconds"
+                )
                 return updated
         except Exception as e:
             logger.error(f"Error calculating lengths: {e}")
@@ -197,6 +193,8 @@ class RoutingCostCalculator:
         """Calculate time-based routing costs."""
         try:
             with connection.cursor() as cursor:
+                logger.info("Starting to calculate time-based routing costs...")
+                start_time = time.time()
                 cursor.execute(
                     """
                     UPDATE gis_data_roadsegment
@@ -209,7 +207,11 @@ class RoutingCostCalculator:
                 """
                 )
                 updated = cursor.rowcount
-                logger.info(f"Calculated time costs for {updated} segments")
+                elapsed = time.time() - start_time
+                logger.info(
+                    f"Calculated time costs for {updated} "
+                    f"segments in {elapsed:.1f} seconds"
+                )
                 return updated
         except Exception as e:
             logger.error(f"Error calculating time costs: {e}")
@@ -220,6 +222,8 @@ class RoutingCostCalculator:
         """Calculate distance-based routing costs."""
         try:
             with connection.cursor() as cursor:
+                logger.info("Starting to calculate distance-based routing costs...")
+                start_time = time.time()
                 cursor.execute(
                     """
                     UPDATE gis_data_roadsegment
@@ -228,7 +232,11 @@ class RoutingCostCalculator:
                 """
                 )
                 updated = cursor.rowcount
-                logger.info(f"Calculated length costs for {updated} segments")
+                elapsed = time.time() - start_time
+                logger.info(
+                    f"Calculated length costs for {updated}"
+                    f" segments in {elapsed:.1f} seconds"
+                )
                 return updated
         except Exception as e:
             logger.error(f"Error calculating length costs: {e}")
@@ -239,6 +247,8 @@ class RoutingCostCalculator:
         """Calculate scenic routing costs."""
         try:
             with connection.cursor() as cursor:
+                logger.info("Starting to calculate scenic routing costs...")
+                start_time = time.time()
                 cursor.execute(
                     """
                     UPDATE gis_data_roadsegment
@@ -252,7 +262,11 @@ class RoutingCostCalculator:
                 """
                 )
                 updated = cursor.rowcount
-                logger.info(f"Calculated scenic costs for {updated} segments")
+                elapsed = time.time() - start_time
+                logger.info(
+                    f"Calculated scenic costs for {updated} "
+                    f"segments in {elapsed:.1f} seconds"
+                )
                 return updated
         except Exception as e:
             logger.error(f"Error calculating scenic costs: {e}")
@@ -263,6 +277,8 @@ class RoutingCostCalculator:
         """Calculate balanced routing costs."""
         try:
             with connection.cursor() as cursor:
+                logger.info("Starting to calculate balanced routing costs...")
+                start_time = time.time()
                 cursor.execute(
                     """
                     UPDATE gis_data_roadsegment
@@ -276,7 +292,11 @@ class RoutingCostCalculator:
                 """
                 )
                 updated = cursor.rowcount
-                logger.info(f"Calculated balanced costs for {updated} segments")
+                elapsed = time.time() - start_time
+                logger.info(
+                    f"Calculated balanced costs for"
+                    f" {updated} segments in {elapsed:.1f} seconds"
+                )
                 return updated
         except Exception as e:
             logger.error(f"Error calculating balanced costs: {e}")
@@ -303,9 +323,23 @@ class MetricsPipeline:
     def calculate_core_metrics(self) -> bool:
         """Calculate core road metrics."""
         try:
-            self.metrics_calculator.calculate_core_metrics()
+            logger.info("Starting core metrics calculation...")
+            start_time = time.time()
+
+            result = self.metrics_calculator.calculate_core_metrics()
+
+            elapsed = time.time() - start_time
+            logger.info(f"Core metrics calculated in {elapsed:.1f} seconds")
+
+            if isinstance(result, dict) and "average_length_m" in result:
+                logger.info(
+                    f"Average segment length: {result['average_length_m']:.1f}m"
+                )
+                logger.info(
+                    f"Average curvature: {result.get('average_curvature', 0):.3f}"
+                )
+
             self.stats["core_metrics_calculated"] = True
-            logger.info("Core metrics calculated")
             return True
         except Exception as e:
             logger.error(f"Error calculating core metrics: {e}")
@@ -314,9 +348,23 @@ class MetricsPipeline:
     def calculate_scenic_scores(self) -> bool:
         """Calculate scenic scores."""
         try:
-            self.metrics_calculator.calculate_scenic_scores()
+            logger.info("Starting scenic scores calculation...")
+            start_time = time.time()
+
+            result = self.metrics_calculator.calculate_scenic_scores()
+
+            elapsed = time.time() - start_time
+            logger.info(f"Scenic scores calculated in {elapsed:.1f} seconds")
+
+            if isinstance(result, dict) and "average_scenic_rating" in result:
+                logger.info(
+                    f"Average scenic rating: {result['average_scenic_rating']:.2f}"
+                )
+                logger.info(
+                    f"Highly scenic segments: {result.get('highly_scenic_segments', 0)}"
+                )
+
             self.stats["scenic_scores_calculated"] = True
-            logger.info("Scenic scores calculated")
             return True
         except Exception as e:
             logger.error(f"Error calculating scenic scores: {e}")
@@ -326,25 +374,43 @@ class MetricsPipeline:
         """Calculate all routing costs."""
         success = True
 
+        logger.info("Starting routing costs calculation...")
+        total_start_time = time.time()
+
         # Update lengths
+        logger.info("Calculating accurate lengths...")
         updated = self.cost_calculator.calculate_accurate_lengths()
         self.stats["lengths_updated"] = updated
+        logger.info(f"Lengths updated for {updated} segments")
 
         # Calculate various costs
+        logger.info("Calculating time-based costs...")
         time_costs = self.cost_calculator.calculate_time_costs()
         self.stats["time_costs_calculated"] = time_costs
 
+        logger.info("Calculating distance-based costs...")
         length_costs = self.cost_calculator.calculate_length_costs()
         self.stats["length_costs_calculated"] = length_costs
 
+        logger.info("Calculating scenic costs...")
         scenic_costs = self.cost_calculator.calculate_scenic_costs()
         self.stats["scenic_costs_calculated"] = scenic_costs
 
+        logger.info("Calculating balanced costs...")
         balanced_costs = self.cost_calculator.calculate_balanced_costs()
         self.stats["balanced_costs_calculated"] = balanced_costs
 
+        total_elapsed = time.time() - total_start_time
+        logger.info(f"All routing costs calculated in {total_elapsed:.1f} seconds")
+
+        logger.info(
+            f"Summary: {time_costs} time costs, {length_costs} length costs, "
+            f"{scenic_costs} scenic costs, {balanced_costs} balanced costs"
+        )
+
         if time_costs == 0 or length_costs == 0:
             success = False
+            logger.error("Failed to calculate essential routing costs")
 
         return success
 
@@ -353,15 +419,24 @@ class MetricsPipeline:
         result = {"success": False, "errors": [], "stats": self.stats.copy()}
 
         try:
+            logger.info("=" * 60)
+            logger.info("STARTING METRICS PIPELINE")
+            logger.info("=" * 60)
+
+            pipeline_start = time.time()
+
             # Core metrics
+            logger.info("--- PHASE 1: Core Metrics ---")
             if not self.calculate_core_metrics():
                 result["errors"].append("Failed to calculate core metrics")
 
             # Scenic scores
+            logger.info("--- PHASE 2: Scenic Scores ---")
             if not self.calculate_scenic_scores():
                 result["errors"].append("Failed to calculate scenic scores")
 
             # Routing costs
+            logger.info("--- PHASE 3: Routing Costs ---")
             if not self.calculate_routing_costs():
                 result["errors"].append("Failed to calculate routing costs")
 
@@ -373,9 +448,18 @@ class MetricsPipeline:
             ):
                 result["success"] = True
 
+            pipeline_elapsed = time.time() - pipeline_start
+            logger.info("=" * 60)
+            logger.info(
+                f"METRICS PIPELINE COMPLETED IN" f" {pipeline_elapsed:.1f} SECONDS"
+            )
+            logger.info(f"Success: {result['success']}")
+            logger.info("=" * 60)
+
             result["stats"] = self.stats.copy()
 
         except Exception as e:
+            logger.error(f"Pipeline error: {e}")
             result["errors"].append(f"Pipeline error: {e}")
 
         return result
@@ -396,10 +480,17 @@ class ValidationReporter:
     def get_topology_validation(self):
         """Get topology validation results."""
         try:
+            logger.info("Starting topology validation...")
             self.validation_results[
                 "topology"
             ] = self.topology_service.validate_topology()
             logger.info("Topology validation completed")
+
+            if self.validation_results["topology"]:
+                logger.info(
+                    f"Topology is valid:"
+                    f" {self.validation_results['topology'].get('is_valid', False)}"
+                )
         except Exception as e:
             logger.warning(f"Topology validation failed: {e}")
             self.validation_results["topology"] = None
@@ -407,9 +498,21 @@ class ValidationReporter:
     def get_topology_summary(self):
         """Get topology summary statistics."""
         try:
+            logger.info("Getting topology summary...")
             self.summary_results[
                 "topology"
             ] = self.topology_service.get_topology_summary()
+            logger.info("Topology summary obtained")
+
+            if self.summary_results["topology"]:
+                logger.info(
+                    f"Total segments:"
+                    f" {self.summary_results['topology'].get('total_segments', 0)}"
+                )
+                logger.info(
+                    f"Routable segments:"
+                    f" {self.summary_results['topology'].get('routable_segments', 0)}"
+                )
         except Exception as e:
             logger.warning(f"Could not get topology summary: {e}")
             self.summary_results["topology"] = None
@@ -417,9 +520,11 @@ class ValidationReporter:
     def get_metrics_summary(self):
         """Get metrics summary statistics."""
         try:
+            logger.info("Getting metrics summary...")
             self.summary_results[
                 "metrics"
             ] = self.metrics_calculator.get_metrics_summary()
+            logger.info("Metrics summary obtained")
         except Exception as e:
             logger.warning(f"Could not get metrics summary: {e}")
             self.summary_results["metrics"] = None
@@ -430,13 +535,11 @@ class ValidationReporter:
         stdout.write("VALIDATION SUMMARY")
         stdout.write("=" * 60)
 
-        # Topology summary
         if self.summary_results.get("topology"):
             stdout.write("\nTopology:")
             for key, value in self.summary_results["topology"].items():
                 stdout.write(f"  {key}: {value}")
 
-        # Metrics summary
         if self.summary_results.get("metrics"):
             stdout.write("\nMetrics:")
             for key, value in self.summary_results["metrics"].items():
@@ -444,9 +547,11 @@ class ValidationReporter:
 
     def run(self) -> dict:
         """Run all validations and reports."""
+        logger.info("Starting validation reporter...")
         self.get_topology_validation()
         self.get_topology_summary()
         self.get_metrics_summary()
+        logger.info("Validation reporter completed")
 
         return {
             "validation": self.validation_results,
@@ -479,30 +584,54 @@ class GISPreparationPipeline:
 
     def verify_extensions(self) -> bool:
         """Verify required PostgreSQL extensions."""
+        logger.info("Verifying PostgreSQL extensions...")
         self.stats[
             "extensions_verified"
         ] = self.extension_manager.verify_required_extensions()
+        logger.info(f"Extensions verified: {self.stats['extensions_verified']}")
         return self.stats["extensions_verified"]
 
     def validate_data(self) -> bool:
         """Validate that we have road data to process."""
+        logger.info("Validating road data...")
         is_empty = self.data_validator.is_database_empty()
         self.stats["data_valid"] = not is_empty
 
         if is_empty:
             summary = self.data_validator.get_road_data_summary()
             logger.warning(f"Road data summary: {summary}")
+            logger.error("No valid road data found")
+        else:
+            count = self.data_validator.count_road_segments()
+            logger.info(f"Valid road data found: {count} segments")
 
+        logger.info(f"Data valid: {self.stats['data_valid']}")
         return self.stats["data_valid"]
 
     def create_topology(self) -> bool:
         """Create routing topology."""
         try:
-            self.topology_service.create_topology(
+            logger.info(
+                f"Creating routing topology"
+                f" (tolerance: {self.tolerance}, force: {self.force_rebuild})..."
+            )
+            start_time = time.time()
+
+            result = self.topology_service.create_topology(
                 tolerance=self.tolerance,
                 force_rebuild=self.force_rebuild,
             )
+
+            elapsed = time.time() - start_time
+            logger.info(f"Topology creation completed in {elapsed:.1f} seconds")
+
+            if result and isinstance(result, dict):
+                logger.info(f"Topology status: {result.get('status', 'unknown')}")
+                logger.info(f"Vertices: {result.get('vertices', 0)}")
+                logger.info(f"Edges: {result.get('edges', 0)}")
+
             self.stats["topology_created"] = True
+            logger.info("Topology created successfully")
             return True
         except Exception as e:
             logger.error(f"Failed to create topology: {e}")
@@ -515,6 +644,7 @@ class GISPreparationPipeline:
             self.stats["metrics_calculated"] = True
             return True
 
+        logger.info("Starting metrics calculation pipeline...")
         pipeline = MetricsPipeline(self.metrics_calculator)
         result = pipeline.run()
 
@@ -525,16 +655,19 @@ class GISPreparationPipeline:
             for error in result["errors"]:
                 logger.error(f"Metrics error: {error}")
 
+        logger.info(f"Metrics calculation success: {result['success']}")
         return result["success"]
 
     def run_validation(self) -> bool:
         """Run validation and reporting."""
         try:
+            logger.info("Running validation...")
             reporter = ValidationReporter(
                 self.topology_service, self.metrics_calculator
             )
             reporter.run()
             self.stats["validation_completed"] = True
+            logger.info("Validation completed successfully")
             return True
         except Exception as e:
             logger.error(f"Validation failed: {e}")
@@ -545,38 +678,63 @@ class GISPreparationPipeline:
         result = {"success": False, "errors": [], "stats": self.stats.copy()}
 
         try:
+            logger.info("=" * 80)
+            logger.info("STARTING GIS PREPARATION PIPELINE")
+            logger.info(f"Area: {self.area}, Tolerance: {self.tolerance}")
+            logger.info(
+                f"Force rebuild: {self.force_rebuild},"
+                f" Skip metrics: {self.skip_metrics}"
+            )
+            logger.info("=" * 80)
+
+            total_start_time = time.time()
+
             # Verify extensions
-            logger.info("Step 1: Verifying PostgreSQL extensions...")
+            logger.info("--- STEP 1: Verifying PostgreSQL extensions ---")
             if not self.verify_extensions():
                 result["errors"].append("Failed to verify/install required extensions")
+                logger.error("Pipeline failed at step 1")
                 return result
 
             # Validate data
-            logger.info("Step 2: Validating road data...")
+            logger.info("--- STEP 2: Validating road data ---")
             if not self.validate_data():
                 result["errors"].append("No valid road data found")
+                logger.error("Pipeline failed at step 2")
                 return result
 
             # Create topology
-            logger.info("Step 3: Creating routing topology...")
+            logger.info("--- STEP 3: Creating routing topology ---")
             if not self.create_topology():
                 result["errors"].append("Failed to create routing topology")
+                logger.error("Pipeline failed at step 3")
                 return result
 
             # Calculate metrics
-            logger.info("Step 4: Calculating metrics...")
+            logger.info("--- STEP 4: Calculating metrics ---")
             if not self.calculate_metrics():
                 result["errors"].append("Failed to calculate metrics")
+                logger.error("Pipeline failed at step 4")
                 return result
 
             # Run validation
-            logger.info("Step 5: Running validation...")
+            logger.info("--- STEP 5: Running validation ---")
             self.run_validation()
 
             result["success"] = True
             result["stats"] = self.stats.copy()
 
+            total_elapsed = time.time() - total_start_time
+            logger.info("=" * 80)
+            logger.info("GIS PREPARATION PIPELINE COMPLETED SUCCESSFULLY")
+            logger.info(
+                f"Total time: {total_elapsed:.1f}"
+                f" seconds ({total_elapsed / 60:.1f} minutes)"
+            )
+            logger.info("=" * 80)
+
         except Exception as e:
+            logger.error(f"Pipeline error: {e}")
             result["errors"].append(f"Pipeline error: {e}")
 
         return result
@@ -625,15 +783,18 @@ class Command(BaseCommand):
     def setup_logging(self, verbose: bool):
         """Setup logging based on verbosity."""
         if verbose:
-            logging.basicConfig(level=logging.INFO)
+            logging.basicConfig(
+                level=logging.INFO,
+                format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            )
         else:
             logging.basicConfig(level=logging.WARNING)
 
     def display_header(self, options: dict):
         """Display command header."""
-        self.stdout.write("=" * 60)
+        self.stdout.write("=" * 80)
         self.stdout.write(f"GIS DATA PREPARATION - Area: {options['area']}")
-        self.stdout.write("=" * 60)
+        self.stdout.write("=" * 80)
 
         self.stdout.write("\nConfiguration:")
         self.stdout.write(f"  Tolerance: {options['tolerance']}")
@@ -648,7 +809,7 @@ class Command(BaseCommand):
         data_validator = RoadDataValidator()
 
         if data_validator.is_database_empty():
-            self.stdout.write(self.style.ERROR("Database is empty"))
+            self.stdout.write("Database is empty")
             return
 
         summary = data_validator.get_road_data_summary()
@@ -667,66 +828,61 @@ class Command(BaseCommand):
 
     def display_pipeline_results(self, result: dict):
         """Display pipeline results."""
-        self.stdout.write("\n" + "=" * 60)
+        self.stdout.write("\n" + "=" * 80)
 
         if result["success"]:
-            self.stdout.write(self.style.SUCCESS("PREPARATION SUCCESSFUL"))
+            self.stdout.write("PREPARATION SUCCESSFUL")
 
             self.stdout.write("\nSteps completed:")
             stats = result["stats"]
 
             if stats.get("extensions_verified"):
-                self.stdout.write("PostgreSQL extensions verified")
+                self.stdout.write("  PostgreSQL extensions verified")
 
             if stats.get("data_valid"):
-                self.stdout.write("Road data validated")
+                self.stdout.write("  Road data validated")
 
             if stats.get("topology_created"):
-                self.stdout.write("Routing topology created")
+                self.stdout.write("  Routing topology created")
 
             if stats.get("metrics_calculated"):
-                self.stdout.write("Metrics calculated")
+                self.stdout.write("  Metrics calculated")
 
             if stats.get("validation_completed"):
-                self.stdout.write("Validation completed")
-
-            # Show metrics details if available
-            if "metrics_details" in stats:
-                details = stats["metrics_details"]
-                self.stdout.write("\nMetrics details:")
-                for key, value in details.items():
-                    if value or value == 0:
-                        self.stdout.write(f"  {key}: {value}")
+                self.stdout.write("  Validation completed")
 
         else:
-            self.stdout.write(self.style.ERROR("PREPARATION FAILED"))
+            self.stdout.write("PREPARATION FAILED")
 
             if result["errors"]:
                 self.stdout.write("\nErrors:")
                 for error in result["errors"]:
-                    self.stdout.write(f"  ✗ {error}")
+                    self.stdout.write(f"  {error}")
 
-        self.stdout.write("=" * 60)
+        self.stdout.write("=" * 80)
 
     def handle(self, *args, **options):
         """Execute the GIS data preparation pipeline."""
         self.setup_logging(options["verbose"])
         self.display_header(options)
+
         if options["validate_only"]:
             self.run_validate_only()
             return
 
-        # Check if database has data
         data_validator = RoadDataValidator()
         if data_validator.is_database_empty():
-            self.stdout.write(self.style.ERROR("\nCannot proceed: No road data found"))
+            self.stdout.write("\nCannot proceed: No road data found")
             self.stdout.write(
                 "Please run: python manage.py import_osm_roads --area test"
             )
             sys.exit(1)
 
-        # Run the preparation pipeline
         self.stdout.write("\nStarting GIS data preparation...")
+        self.stdout.write(
+            f"Processing {data_validator.count_road_segments():,} road segments"
+        )
+        self.stdout.write("This may take several minutes for large datasets...")
 
         pipeline = GISPreparationPipeline(
             area=options["area"],
@@ -737,9 +893,7 @@ class Command(BaseCommand):
 
         result = pipeline.run()
 
-        # Display results
         self.display_pipeline_results(result)
 
-        # Exit with appropriate code
         if not result["success"]:
             sys.exit(1)
