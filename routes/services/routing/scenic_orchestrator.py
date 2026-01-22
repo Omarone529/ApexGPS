@@ -5,7 +5,12 @@ from django.contrib.gis.geos import Point
 
 from .fast_routing import FastRoutingService
 from .scenic_routing import ScenicRoutingService
-from .utils import _get_segments_by_ids
+from .utils import (
+    _calculate_path_metrics,
+    _create_route_geometry,
+    _encode_linestring_to_polyline,
+    _get_segments_by_ids,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +23,6 @@ class ScenicRouteOrchestrator:
     @staticmethod
     def _get_route_segments_with_metrics(edge_ids: list[int]) -> dict | None:
         """Get route segments and calculate metrics."""
-        from .utils import (
-            _calculate_path_metrics,
-            _create_route_geometry,
-            _encode_linestring_to_polyline,
-        )
-
         segments = _get_segments_by_ids(edge_ids)
         if not segments:
             return None
