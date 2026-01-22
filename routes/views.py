@@ -249,6 +249,154 @@ class RouteViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+    @action(
+        detail=False,
+        methods=["post"],
+        permission_classes=[permissions.IsAuthenticatedOrReadOnly],
+        url_path="calculate-scenic",
+    )
+    def calculate_scenic_route(self, request):
+        """
+        Calculate scenic route between two locations.
+        Accepts location names and scenic preference.
+        """
+        start_time = time.time()
+
+        try:
+            from routes.services.routing.scenic_orchestrator import (
+                ScenicRouteOrchestrator,
+            )
+        except ImportError:
+            return Response(
+                {
+                    "error": "Scenic routing services not available. "
+                    "Please ensure scenic_routing.py exists."
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        # Check if routing services are available
+        if not FastRoutingService or not RouteValidator:
+            return Response(
+                {
+                    "error": "Routing services not available. "
+                    "Please ensure database is prepared."
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        input_serializer = RouteCalculationInputSerializer(data=request.data)
+        if not input_serializer.is_valid():
+            return Response(input_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        validated_data = input_serializer.validated_data
+
+        # Extract parameters
+        start_lat = validated_data["start_lat"]
+        start_lon = validated_data["start_lon"]
+        end_lat = validated_data["end_lat"]
+        end_lon = validated_data["end_lon"]
+        vertex_threshold = validated_data.get("vertex_threshold", 0.01)
+        start_location_name = validated_data["start_location_name"]
+        end_location_name = validated_data["end_location_name"]
+
+        # Get scenic preference from request (default to "balanced")
+        preference = request.data.get("preference", "balanced")
+        valid_preferences = ["fast", "balanced", "most_winding"]
+        if preference not in valid_preferences:
+            return Response(
+                {"error": f"Invalid preference. Must be one of: {valid_preferences}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Initialize services
+        validator = RouteValidator()
+
+        # Validate route request
+        validation_result = validator.full_route_validation(
+            start_lat=start_lat,
+            start_lon=start_lon,
+            end_lat=end_lat,
+            end_lon=end_lon,
+            max_distance_km=1000.0,
+        )
+
+        if not validation_result["is_valid"]:
+            return Response(
+                {
+                    "error": "Route validation failed",
+                    "details": validation_result,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            scenic_result = ScenicRouteOrchestrator.calculate_from_coordinates(
+                start_lat=start_lat,
+                start_lon=start_lon,
+                end_lat=end_lat,
+                end_lon=end_lon,
+                preference=preference,
+                vertex_threshold=vertex_threshold,
+            )
+
+            if not scenic_result.get("success"):
+                error_msg = scenic_result.get(
+                    "error", "Unknown error calculating scenic route"
+                )
+                return Response(
+                    {
+                        "error": error_msg,
+                        "validation": validation_result,
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+            # Prepare response data
+            processing_time = time.time() - start_time
+
+            # Add location names to result
+            scenic_result["locations"] = {
+                "start": {
+                    "name": start_location_name,
+                    "lat": start_lat,
+                    "lon": start_lon,
+                },
+                "end": {
+                    "name": end_location_name,
+                    "lat": end_lat,
+                    "lon": end_lon,
+                },
+            }
+
+            # Add processing time
+            scenic_result["processing_time_ms"] = round(processing_time * 1000, 2)
+
+            return Response(scenic_result, status=status.HTTP_200_OK)
+
+        except ValueError as e:
+            return Response(
+                {
+                    "error": f"Invalid input: {str(e)}",
+                    "validation": validation_result,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception as e:
+            import traceback
+
+            logger.error(
+                f"Error calculating scenic route: {str(e)}\n{traceback.format_exc()}"
+            )
+
+            return Response(
+                {
+                    "error": f"Error calculating scenic route: {str(e)}",
+                    "validation": validation_result,
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
     @action(detail=True, methods=["post"], permission_classes=[IsOwnerOrReadOnly])
     def add_stop(self, request, pk=None):
         """Add a stop to a route and recalculate the route."""
