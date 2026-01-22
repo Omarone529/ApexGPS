@@ -89,9 +89,8 @@ class FastRoutingService(BaseRoutingService):
             if not is_valid:
                 raise ValueError(f"Invalid {coord_name} coordinates: {error_msg}")
 
-        # Create points
-        start_point = Point(start_lon, start_lat)
-        end_point = Point(end_lon, end_lat)
+        start_point = Point(start_lon, start_lat, srid=4326)
+        end_point = Point(end_lon, end_lat, srid=4326)
 
         # Calculate route
         return self.calculate_route(start_point, end_point, **kwargs)

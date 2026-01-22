@@ -28,7 +28,6 @@ class RouteValidator:
             )
             return cursor.fetchone()[0]
 
-    @staticmethod
     def validate_route_distance(
         start_point: Point, end_point: Point, max_distance_km: float = 1000.0
     ) -> tuple[bool, str]:
@@ -36,12 +35,9 @@ class RouteValidator:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT ST_Distance(
-                    ST_MakePoint(%s, %s)::geography,
-                    ST_MakePoint(%s, %s)::geography
-                ) / 1000.0
+                SELECT ST_Distance(%s::geography, %s::geography) / 1000.0
                 """,
-                [start_point.x, start_point.y, end_point.x, end_point.y],
+                [start_point, end_point],
             )
             straight_line_km = cursor.fetchone()[0]
 
@@ -129,9 +125,8 @@ class RouteValidator:
         if results["errors"]:
             return results
 
-        # Create points
-        start_point = Point(start_lon, start_lat)
-        end_point = Point(end_lon, end_lat)
+        start_point = Point(start_lon, start_lat, srid=4326)
+        end_point = Point(end_lon, end_lat, srid=4326)
 
         # Check network bounds
         in_bounds, bounds_msg = self.is_point_in_network_bounds(start_point)
