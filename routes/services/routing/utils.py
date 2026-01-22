@@ -36,18 +36,16 @@ def _validate_coordinates(lat: float, lon: float) -> tuple[bool, str]:
 
 def _find_nearest_vertex(point: Point, distance_threshold: float = 0.01) -> int | None:
     """Find nearest routing vertex to a geographic point."""
-    lon, lat = point.x, point.y
-
     with connection.cursor() as cursor:
         cursor.execute(
             """
             SELECT id
             FROM gis_data_roadsegment_vertices_pgr
-            WHERE ST_DWithin(the_geom, ST_MakePoint(%s, %s), %s)
-            ORDER BY ST_Distance(the_geom, ST_MakePoint(%s, %s))
+            WHERE ST_DWithin(the_geom, %s, %s)
+            ORDER BY ST_Distance(the_geom, %s)
             LIMIT 1
             """,
-            [lon, lat, distance_threshold, lon, lat],
+            [point, distance_threshold, point],  # Django passa automaticamente SRID
         )
 
         result = cursor.fetchone()
