@@ -20,6 +20,9 @@ __all__ = [
     "_extract_edges_from_dijkstra_result",
     "_get_segments_by_ids",
     "_create_route_geometry",
+    "_get_segments_with_scenic_data",
+    "_calculate_route_scenic_stats",
+    "_compare_routes_scenic_quality",
 ]
 
 
@@ -424,4 +427,143 @@ def _prepare_route_response(
             "start_original_name": start_data.get("original_name", ""),
             "end_original_name": end_data.get("original_name", ""),
         },
+    }
+
+
+def _get_segments_with_scenic_data(edge_ids: list[int]) -> list[dict]:
+    """Get road segments with scenic data (scenic_rating, curvature)."""
+    if not edge_ids:
+        return []
+
+    with connection.cursor() as cursor:
+        # Create array of IDs for PostgreSQL
+        ids_array = "{" + ",".join(map(str, edge_ids)) + "}"
+
+        query = """
+            SELECT
+                id, osm_id, name, highway, length_m,
+                cost_time, scenic_rating, curvature,
+                ST_AsText(geometry) as geometry_wkt
+            FROM gis_data_roadsegment
+            WHERE id = ANY(%s::int[])
+            AND (scenic_rating IS NOT NULL OR curvature IS NOT NULL)
+            ORDER BY array_position(%s::int[], id)
+        """
+
+        cursor.execute(query, [ids_array, ids_array])
+        rows = cursor.fetchall()
+
+    return [_row_to_segment_dict(row) for row in rows]
+
+
+def _calculate_route_scenic_stats(segments: list[dict]) -> dict:
+    """Calculate detailed scenic statistics for a route."""
+    if not segments:
+        return {
+            "has_scenic_data": False,
+            "scenic_segment_count": 0,
+            "total_scenic_score": 0.0,
+            "scenic_breakdown": {},
+        }
+
+    scenic_segments = [s for s in segments if s.get("scenic_rating") is not None]
+    curvy_segments = [s for s in segments if s.get("curvature", 0) > 0.7]
+
+    # Calculate scenic rating distribution
+    rating_distribution = {}
+    for segment in scenic_segments:
+        rating = segment.get("scenic_rating", 0)
+        rating_key = f"rating_{int(rating)}"
+        rating_distribution[rating_key] = rating_distribution.get(rating_key, 0) + 1
+
+    # Calculate length by scenic quality
+    length_by_quality = {"high": 0.0, "medium": 0.0, "low": 0.0}
+    for segment in segments:
+        rating = segment.get("scenic_rating", 2.5)
+        length = segment.get("length_m", 0)
+
+        if rating >= 4.0:
+            length_by_quality["high"] += length
+        elif rating >= 2.5:
+            length_by_quality["medium"] += length
+        else:
+            length_by_quality["low"] += length
+
+    total_length = sum(length_by_quality.values())
+    if total_length > 0:
+        for key in length_by_quality:
+            length_by_quality[key] = round(
+                length_by_quality[key] / total_length * 100, 1
+            )
+
+    # Calculate curvature statistics
+    curvature_values = [
+        s.get("curvature", 0) for s in segments if s.get("curvature") is not None
+    ]
+    avg_curvature = (
+        sum(curvature_values) / len(curvature_values) if curvature_values else 0.0
+    )
+
+    return {
+        "has_scenic_data": len(scenic_segments) > 0,
+        "scenic_segment_count": len(scenic_segments),
+        "total_segments": len(segments),
+        "scenic_coverage_percent": round(len(scenic_segments) / len(segments) * 100, 1)
+        if segments
+        else 0,
+        "curvy_segment_count": len(curvy_segments),
+        "curvy_segment_percent": round(len(curvy_segments) / len(segments) * 100, 1)
+        if segments
+        else 0,
+        "avg_curvature": round(avg_curvature, 3),
+        "scenic_rating_distribution": rating_distribution,
+        "length_by_scenic_quality": length_by_quality,
+    }
+
+
+def _compare_routes_scenic_quality(
+    route1_segments: list[dict], route2_segments: list[dict]
+) -> dict:
+    """Compare scenic quality between two routes."""
+
+    def calculate_route_score(segments):
+        if not segments:
+            return 0.0
+
+        total_score = 0.0
+        total_length = 0.0
+
+        for segment in segments:
+            rating = segment.get("scenic_rating", 2.5)
+            curvature = segment.get("curvature", 0.5)
+            length = segment.get("length_m", 0)
+
+            # Combined score: scenic rating boosted by curvature
+            score = rating * (1.0 + curvature)
+
+            total_score += score * length
+            total_length += length
+
+        if total_length == 0:
+            return 0.0
+
+        avg_score = total_score / total_length
+        return (avg_score / 5.0) * 100  # Convert to 0-100 scale
+
+    score1 = calculate_route_score(route1_segments)
+    score2 = calculate_route_score(route2_segments)
+
+    score_difference = score2 - score1
+    percent_difference = (score_difference / score1 * 100) if score1 > 0 else 0
+
+    return {
+        "route1_score": round(score1, 1),
+        "route2_score": round(score2, 1),
+        "score_difference": round(score_difference, 1),
+        "percent_difference": round(percent_difference, 1),
+        "better_route": "route1"
+        if score1 > score2
+        else "route2"
+        if score2 > score1
+        else "equal",
     }
