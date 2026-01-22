@@ -29,15 +29,21 @@ class RouteValidator:
             return cursor.fetchone()[0]
 
     def validate_route_distance(
-        start_point: Point, end_point: Point, max_distance_km: float = 1000.0
+        self, start_point: Point, end_point: Point, max_distance_km: float = 1000.0
     ) -> tuple[bool, str]:
         """Validate that route distance is reasonable."""
+        start_wkt = f"SRID=4326;POINT({start_point.x} {start_point.y})"
+        end_wkt = f"SRID=4326;POINT({end_point.x} {end_point.y})"
+
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT ST_Distance(%s::geography, %s::geography) / 1000.0
+                SELECT ST_Distance(
+                    ST_GeomFromEWKT(%s)::geography,
+                    ST_GeomFromEWKT(%s)::geography
+                ) / 1000.0
                 """,
-                [start_point, end_point],
+                [start_wkt, end_wkt],
             )
             straight_line_km = cursor.fetchone()[0]
 

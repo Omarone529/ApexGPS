@@ -36,14 +36,40 @@ def _validate_coordinates(lat: float, lon: float) -> tuple[bool, str]:
 
 def _find_nearest_vertex(point: Point, distance_threshold: float = 0.01) -> int | None:
     """Find nearest routing vertex to a geographic point."""
-    point_wkt = point.wkt
+    point_wkt = f"SRID=4326;POINT({point.x} {point.y})"
+
     with connection.cursor() as cursor:
         cursor.execute(
             """
-            SELECT id
-            FROM gis_data_roadsegment_vertices_pgr
-            WHERE ST_DWithin(the_geom, ST_GeomFromText(%s, 4326), %s)
-            ORDER BY ST_Distance(the_geom, ST_GeomFromText(%s, 4326))
+            SELECT v.id, COUNT(r.id) as connection_count
+            FROM gis_data_roadsegment_vertices_pgr v
+            LEFT JOIN gis_data_roadsegment r ON
+                (r.source = v.id OR r.target = v.id)
+                AND r.is_active = true
+                AND r.highway NOT IN ('footway', 'path', 'cycleway', 'steps', 'service')
+            WHERE ST_DWithin(v.the_geom, ST_GeomFromEWKT(%s), %s)
+            GROUP BY v.id
+            HAVING COUNT(r.id) >= 2  -- Almeno 2 collegamenti (non terminale)
+            ORDER BY ST_Distance(v.the_geom, ST_GeomFromEWKT(%s))
+            LIMIT 1
+            """,
+            [point_wkt, distance_threshold, point_wkt],
+        )
+
+        result = cursor.fetchone()
+        if result:
+            return result[0]
+
+        cursor.execute(
+            """
+            SELECT v.id
+            FROM gis_data_roadsegment_vertices_pgr v
+            LEFT JOIN gis_data_roadsegment r ON
+                (r.source = v.id OR r.target = v.id)
+                AND r.is_active = true
+            WHERE ST_DWithin(v.the_geom, ST_GeomFromEWKT(%s), %s)
+            GROUP BY v.id
+            ORDER BY ST_Distance(v.the_geom, ST_GeomFromEWKT(%s))
             LIMIT 1
             """,
             [point_wkt, distance_threshold, point_wkt],
