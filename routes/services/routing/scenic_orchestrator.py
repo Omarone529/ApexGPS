@@ -10,6 +10,7 @@ from .utils import (
     _create_route_geometry,
     _encode_linestring_to_polyline,
     _get_segments_by_ids,
+    _validate_coordinates,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,7 +103,8 @@ class ScenicRouteOrchestrator:
             }
 
         fastest_time = fastest_result.get("total_time_seconds", 0)
-        logger.info(f"Fastest route time: {fastest_time:.1f}s")
+        fastest_minutes = fastest_result.get("total_time_minutes", 0)
+        logger.info(f"Fastest route time: {fastest_minutes:.1f} min")
 
         # Calculate scenic route
         logger.info(f"Calculating scenic route with '{preference}' preference...")
@@ -111,10 +113,8 @@ class ScenicRouteOrchestrator:
         scenic_result = scenic_service.calculate_route(
             start_point=start_point,
             end_point=end_point,
-            reference_fastest_time=fastest_time,
+            reference_fastest_time=fastest_minutes,
             vertex_threshold=vertex_threshold,
-            find_alternatives=True,
-            max_alternatives=5,
         )
 
         processing_time_ms = (time.time() - start_time) * 1000
@@ -128,57 +128,53 @@ class ScenicRouteOrchestrator:
             }
 
         # Calculate comparison metrics
-        scenic_time = scenic_result.get("total_time_seconds", 0)
-        time_difference = scenic_time - fastest_time
-        time_difference_percent = (
-            (time_difference / fastest_time * 100) if fastest_time > 0 else 0
+        scenic_minutes = scenic_result.get("total_time_minutes", 0)
+        time_excess_minutes = scenic_minutes - fastest_minutes
+        time_excess_percent = (
+            (time_excess_minutes / fastest_minutes * 100) if fastest_minutes > 0 else 0
         )
-
-        # Calculate actual scenic score
-        segments = scenic_result.get("segments", [])
-        actual_scenic_score = (
-            ScenicRouteOrchestrator._calculate_scenic_score_for_segments(segments)
-        )
-
-        # Check constraint
-        max_increase = scenic_service.preference_config.max_time_increase_percent
-        is_within_constraint = time_difference_percent <= max_increase
+        actual_scenic_score = scenic_result.get("total_scenic_score", 0)
+        max_excess_minutes = ScenicRoutingService.MAX_TIME_EXCESS_MINUTES
+        is_within_constraint = time_excess_minutes <= max_excess_minutes
 
         result = {
             "success": True,
             "calculation": {
                 "preference": preference,
-                "preference_description": scenic_service.preference_config.description,
+                "preference_description": scenic_service.config["description"],
                 "is_within_time_constraint": is_within_constraint,
-                "constraint_limit_percent": max_increase,
+                "constraint_limit_minutes": max_excess_minutes,
                 "processing_time_ms": round(processing_time_ms, 2),
             },
             "fastest_route": {
                 "total_time_seconds": fastest_time,
-                "total_time_minutes": fastest_result.get("total_time_minutes", 0),
+                "total_time_minutes": fastest_minutes,
                 "total_distance_km": fastest_result.get("total_distance_km", 0),
                 "polyline": fastest_result.get("polyline", ""),
                 "segment_count": fastest_result.get("segment_count", 0),
             },
             "scenic_route": {
-                "total_time_seconds": scenic_time,
-                "total_time_minutes": scenic_result.get("total_time_minutes", 0),
+                "total_time_seconds": scenic_result.get("total_time_seconds", 0),
+                "total_time_minutes": scenic_minutes,
                 "total_distance_km": scenic_result.get("total_distance_km", 0),
-                "scenic_score": scenic_result.get("total_scenic_score", 0),
-                "actual_scenic_score": round(actual_scenic_score, 1),
+                "scenic_score": actual_scenic_score,
                 "avg_scenic_rating": scenic_result.get("avg_scenic_rating", 0),
                 "avg_curvature": scenic_result.get("avg_curvature", 0),
+                "total_poi_density": scenic_result.get("total_poi_density", 0),
                 "polyline": scenic_result.get("polyline", ""),
                 "segment_count": scenic_result.get("segment_count", 0),
-                "time_constraint_status": scenic_result.get("time_constraint", {}),
+                "poi_count": scenic_result.get("poi_count", 0),
+                "poi_stops": scenic_result.get("poi_stops", []),
+                "time_constraint": scenic_result.get("time_constraint", {}),
             },
             "comparison": {
-                "time_difference_seconds": round(time_difference, 1),
-                "time_difference_minutes": round(time_difference / 60, 1),
-                "time_difference_percent": round(time_difference_percent, 1),
+                "time_excess_minutes": round(time_excess_minutes, 1),
+                "time_excess_percent": round(time_excess_percent, 1),
+                "scenic_score": round(actual_scenic_score, 1),
                 "scenic_score_difference": round(
                     actual_scenic_score - 50, 1
                 ),  # vs average 50
+                "poi_count": scenic_result.get("poi_count", 0),
                 "recommendation": "scenic"
                 if is_within_constraint and actual_scenic_score > 60
                 else "fastest",
@@ -187,8 +183,9 @@ class ScenicRouteOrchestrator:
 
         logger.info(
             f"Scenic route calculation complete: "
-            f"time +{time_difference_percent:.1f}%, "
+            f"time +{time_excess_minutes:.1f}min (+{time_excess_percent:.1f}%), "
             f"scenic score: {actual_scenic_score:.1f}/100, "
+            f"POIs: {scenic_result.get('poi_count', 0)}, "
             f"constraint: {'OK' if is_within_constraint else 'EXCEEDED'}"
         )
 
@@ -204,8 +201,6 @@ class ScenicRouteOrchestrator:
         **kwargs,
     ) -> dict:
         """Calculate scenic route from coordinates."""
-        from .utils import _validate_coordinates
-
         # Validate coordinates
         for coord_name, lat, lon in [
             ("start", start_lat, start_lon),
