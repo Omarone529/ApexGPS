@@ -17,21 +17,22 @@ Questo documento descrive il servizio backend API del progetto, l'infrastruttura
 Lo scopo è fornire un motore di routing avanzato che genera percorsi panoramici e sinuosi, dando priorità all'esperienza di guida, pur mantenendo un vincolo di tempo ragionevole rispetto al percorso più veloce.
 
 Funzionalità Chiave:
-- Calcolo Percorso Smart: Genera percorsi unici che massimizzano la sinuosità e l'interesse panoramico.
-- Tolleranza Tempo: Il percorso panoramico non supera il percorso più veloce di indicativamente 40 minuti (vincolo operativo critico).
+- Calcolo Percorso Panoramico: Genera percorsi unici che massimizzano la sinuosità e l'interesse panoramico.
+- Tolleranza Tempo: Il percorso panoramico non supera il percorso più veloce di indicativamente 40 minuti.
 - API Universale: Serve un'unica interfaccia dati (API) per le applicazioni mobile e web.
-- Persistenza Utente: Gestisce l'autenticazione (JWT) e il salvataggio/sincronizzazione dei percorsi per ciascun utente.
+- Persistenza Utente: Gestisce l'autenticazione (JWT e OAuth) e il salvataggio/sincronizzazione dei percorsi per ciascun utente.
 ## 2. Architettura e Stack Tecnologico
 
-Il backend è un'applicazione disaccoppiata basata su un'architettura GIS (Geographic Information System) open-source, fornendo un servizio esclusivamente tramite API REST.
+Il backend è un'applicazione indipendente basata su un'architettura GIS (Geographic Information System) open-source, fornendo il servizio esclusivamente tramite API REST.
 
 ### Logica di Routing (Core GIS)
 
 Il calcolo del percorso è gestito da una funzione di costo custom all'interno del grafo di pgRouting.
 La funzione di costo C per ogni segmento stradale è definita come:
-Csegmento​=(α⋅Distanza)−(β⋅Stotale​)
 
-S totale​ (Punteggio Panoramico) è un valore pre-calcolato che combina:
+C_segmento = (α⋅Distanza)−(β⋅Stotale)
+
+S totale (Punteggio Panoramico) è un valore pre-calcolato che combina:
 - Sinuosità (curve)
 - Variazione di Altitudine
 - Prossimità ai POI.
