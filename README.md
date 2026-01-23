@@ -5,6 +5,8 @@
 ![API-DRF](https://img.shields.io/badge/API-DRF-FF5432?logo=djangorestframework&logoColor=white)
 ![GIS-PostGIS/pgRouting](https://img.shields.io/badge/GIS-PostGIS%2FpgRouting-4169E1?logo=postgresql&logoColor=white)
 ![Architecture-REST API](https://img.shields.io/badge/Architecture-REST%20API-7B8997)
+![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
+![Containerized-Docker](https://img.shields.io/badge/Containerized-Docker-2496ED?logo=docker&logoColor=white)
 
 ![Logo](./assets/logo/ApexGPS_logo.png)
 
@@ -42,6 +44,7 @@ Questa sezione è destinata agli sviluppatori per la configurazione dell'ambient
 
 Prerequisiti
 
+Il progetto è completamente containerizzato con Docker e Docker Compose, includendo sia l'applicazione Django che il database PostgreSQL con PostGIS/pgRouting.
 Assicurarsi che siano installati i seguenti servizi a livello di sistema:
 
     PostgreSQL (versione 14+)
@@ -49,6 +52,10 @@ Assicurarsi che siano installati i seguenti servizi a livello di sistema:
     PostGIS e pgRouting (abilitati come estensioni nel database)
 
     Python 3.10+
+
+    Docker Engine 24.0+
+
+    Docker Compose v2.20+
 
 Installazione e Avvio
 
@@ -60,11 +67,23 @@ Clonazione e Dipendenze
 
 ### Bash
 
+# Clonare la repository
 git clone https://github.com/Omarone529/ApexGPS
 cd ApexGPS
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+
+# Avviare tutti i servizi (Django + PostgreSQL + PostGIS)
+
+docker compose build
+
+docker compose up
+
+# Eseguire le migrazioni del database
+docker-compose exec web python manage.py migrate
+
+# Creare un superuser (facoltativo)
+docker compose exec web python manage.py createsuperuser
+
+# L'applicazione sarà disponibile all'indirizzo: http://localhost:8000
 
 ### Configurazione Database e Migrazioni
 
@@ -80,31 +99,20 @@ python manage.py runserver
 
 ## 4. Documentazione API (Per Sviluppatori Frontend)
 
-L'interfaccia di comunicazione è standard REST, con risposte in formato JSON.
+L'interfaccia di comunicazione è standard REST, con risposte in formato JSON. Tutti gli endpoint sono accessibili a partire dalla root dell'API: /api/
 
-Calcolo del Percorso (POST /api/routes/calculate/)
-
-| Parametro | Tipo  | Descrizione |
-| :--- |:------| :--- |
-| **`start_lat`**, **`start_lon`** | float | Coordinate geografiche (latitudine e longitudine) del **punto di partenza**. |
-| **`end_lat`**, **`end_lon`** | float | Coordinate geografiche (latitudine e longitudine) del **punto di arrivo**. |
-| **`preference`** | string| Livello di ottimizzazione del percorso panoramico. Valori: `"veloce"`, `"equilibrata"`, `"sinuosa_massima"`. |
-
-
-Risposta di Successo (Estratto):
-```
-JSON
-{
-  "distance_km": 300.5,
-  "estimated_time_min": 240,
-  "polyline": "encoded_polyline_string_per_mappa"
-}
-```
-Gestione Percorsi Utente (CRUD)
-
-Questi endpoint richiedono l'invio del token JWT nell'intestazione Authorization.
-
-| Endpoint | Metodo | Funzione |
-| :--- | :--- | :--- |
-| `/api/saved_routes/` | `GET` / `POST` | Recupera l'elenco dei percorsi salvati o ne salva uno nuovo. |
-| `/api/saved_routes/{id}/` | `DELETE` | Elimina un percorso specifico tramite il suo ID. |
+| Categoria | Metodo | Endpoint | Parametri Obbligatori | Funzione |
+| :--- | :--- | :--- | :--- | :--- |
+| **Utenti** | `GET` | `/api/users/` | - | Gestione profili e lista utenti. |
+| **GIS Data** | `GET` | `/api/gis_data/points-of-interest/` | - | Recupera i punti di interesse lungo i percorsi. |
+| **GIS Data** | `GET` | `/api/gis_data/scenic-areas/` | - | Elenco delle aree panoramiche mappate. |
+| **DEM Data** | `GET` | `/api/dem_data/elevation-queries/` | `lat`, `lon` | Interrogazioni puntuali sull'altitudine (DEM). |
+| **DEM Data** | `GET` | `/api/dem_data/dem/` | - | Accesso ai dati grezzi del Digital Elevation Model. |
+| **Routing** | `GET/POST` | `/api/routes/routes/` | - | Operazioni CRUD sui percorsi salvati. |
+| **Routing** | `GET/POST` | `/api/routes/stops/` | `route_id` | Gestione delle tappe intermedie dei percorsi. |
+| **Routing** | `POST` | `/api/routes/calculate-benchmark/` | `start_lat`, `start_lon`, `end_lat`, `end_lon` | **Solo Backend/Dev**: Calcolo baseline (non usare in Frontend). |
+| **Routing** | `POST` | `/api/routes/calculate-scenic/` | `start_lat`, `start_lon`, `end_lat`, `end_lon`, `preference` | **Core**: Calcolo percorso panoramico ottimizzato. |
+| **Routing** | `GET` | `/api/routes/my-routes/` | - | Visualizza i percorsi personali dell'utente. |
+| **Routing** | `GET` | `/api/routes/public/` | - | Elenco dei percorsi condivisi pubblicamente. |
+| **Auth** | `POST` | `/api/authentication/` | `username`, `password` | Endpoint per il login e gestione sessione. |
+| **Admin** | `ANY` | `/api/admin/` | - | Interfaccia di amministrazione Django. |
