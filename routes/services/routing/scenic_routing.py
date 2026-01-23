@@ -8,6 +8,7 @@ from .utils import (
     _calculate_path_metrics,
     _create_route_geometry,
     _encode_linestring_to_polyline,
+    _execute_dijkstra_query,
     _extract_edges_from_dijkstra_result,
     _find_nearest_vertex,
     _get_segments_by_ids,
@@ -16,402 +17,610 @@ from .utils import (
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ScenicRoutingService", "ScenicPreference"]
+__all__ = ["POIStop", "ScenicRoutingService"]
 
 
-class ScenicPreference:
-    """Container for scenic routing preferences."""
+class POIStop:
+    """Represents a Point of Interest stop along a scenic motorcycle route."""
 
     def __init__(
         self,
+        poi_id: int,
         name: str,
-        time_weight: float,
-        scenic_weight: float,
-        curvature_weight: float,
-        max_time_increase_percent: float,
-        description: str = "",
+        category: str,
+        location: Point,
+        scenic_value: float,
     ):
-        """Initialize scenic preference."""
+        """Initialize POIStop object."""
+        self.poi_id = poi_id
         self.name = name
-        self.time_weight = time_weight
-        self.scenic_weight = scenic_weight
-        self.curvature_weight = curvature_weight
-        self.max_time_increase_percent = max_time_increase_percent
-        self.description = description
+        self.category = category
+        self.location = location
+        self.scenic_value = scenic_value
 
-        # Normalize weights to sum to 1.0
-        total = time_weight + scenic_weight + curvature_weight
-        if total > 0:
-            self.time_weight = time_weight / total
-            self.scenic_weight = scenic_weight / total
-            self.curvature_weight = curvature_weight / total
+    def to_dict(self) -> dict:
+        """Convert POI stop to dictionary for API response."""
+        return {
+            "poi_id": self.poi_id,
+            "name": self.name,
+            "category": self.category,
+            "location": {"lat": self.location.y, "lon": self.location.x},
+            "scenic_value": round(self.scenic_value, 2),
+        }
 
 
 class ScenicRoutingService(BaseRoutingService):
     """
-    Scenic routing service using real OSM data.
+    Calculates scenic motorcycle routes that balance travel time with scenic quality.
 
-    Uses only existing database fields:
-    - cost_time: Travel time in seconds
-    - scenic_rating: Scenic quality (0-5, higher is better)
-    - curvature: Road curvature (0-1, higher is more winding)
-
-    Calculates scenic routes that balance travel time with scenic quality
-    while respecting configurable time constraints.
+    Key features:
+    - Includes Points of Interest as mandatory stops
+    - Uses pre-calculated scenic metrics from RoadSegment
+    - Respects 40-minute time constraint vs fastest route
+    - Considers POI density, scenic rating, and road curvature
+    - Finds nearest road network vertices for start/end points
+    - Calculates initial scenic route to identify potential POIs
+    - Selects highest-value POIs within route proximity
+    - Recalculates route through selected POIs
+    - Validates against 40-minute time constraint
     """
 
-    # Predefined scenic preferences based on real data
-    SCENIC_PREFERENCES = {
-        "fast": ScenicPreference(
-            name="fast",
-            time_weight=0.8,
-            scenic_weight=0.15,
-            curvature_weight=0.05,
-            max_time_increase_percent=10.0,
-            description="Fastest scenic route, minimal time increase",
-        ),
-        "balanced": ScenicPreference(
-            name="balanced",
-            time_weight=0.5,
-            scenic_weight=0.3,
-            curvature_weight=0.2,
-            max_time_increase_percent=20.0,
-            description="Balanced mix of speed and scenery",
-        ),
-        "most_winding": ScenicPreference(
-            name="most_winding",
-            time_weight=0.3,
-            scenic_weight=0.3,
-            curvature_weight=0.4,
-            max_time_increase_percent=30.0,
-            description="Maximizes winding roads and scenery",
-        ),
+    # Maximum time increase vs fastest route (40 minutes absolute)
+    MAX_TIME_EXCESS_MINUTES = 40.0
+
+    # Configuration for different scenic preference levels
+    PREFERENCE_CONFIGS = {
+        "fast": {
+            "time_weight": 0.70,
+            "poi_weight": 0.20,
+            "scenic_weight": 0.08,
+            "curvature_weight": 0.02,
+            "min_pois": 1,
+            "max_pois": 10,
+            "description": "Fast scenic route with minimal POI stops",
+        },
+        "balanced": {
+            "time_weight": 0.50,
+            "poi_weight": 0.30,
+            "scenic_weight": 0.15,
+            "curvature_weight": 0.05,
+            "min_pois": 2,
+            "max_pois": 5,
+            "description": "Balanced mix of speed, scenery, and POI stops",
+        },
+        "most_winding": {
+            "time_weight": 0.30,
+            "poi_weight": 0.20,
+            "scenic_weight": 0.25,
+            "curvature_weight": 0.25,
+            "min_pois": 3,
+            "max_pois": 8,
+            "description": "Emphasizes winding roads and maximum POI stops",
+        },
     }
 
     def __init__(self, preference: str = "balanced"):
-        """Initialize scenic routing service."""
-        if preference not in self.SCENIC_PREFERENCES:
+        """Initialize scenic routing service with specified preference."""
+        if preference not in self.PREFERENCE_CONFIGS:
             raise ValueError(
-                f"Preference must be one of: {list(self.SCENIC_PREFERENCES.keys())}"
+                f"Preference must be one of: {list(self.PREFERENCE_CONFIGS.keys())}"
             )
 
         self.preference = preference
-        self.preference_config = self.SCENIC_PREFERENCES[preference]
+        self.config = self.PREFERENCE_CONFIGS[preference]
+        logger.debug(f"Initialized ScenicRoutingService with preference: {preference}")
 
     def get_cost_column(self) -> str:
-        """Get SQL expression for scenic cost calculation."""
-        time_weight = self.preference_config.time_weight
-        scenic_weight = self.preference_config.scenic_weight
-        curvature_weight = self.preference_config.curvature_weight
+        """
+        Generate SQL expression for scenic routing cost calculation.
 
-        # Normalize cost_time (divide by 3600 to convert seconds to hours)
-        # Lower time = better
-        time_component = "(cost_time / 3600.0)"
+        The cost function combines four factors with configurable weights:
+        - Travel time (normalized to minutes)
+        - POI density (weighted, inverted: higher density = lower cost)
+        - Scenic rating (0-10 scale, inverted: higher rating = lower cost)
+        - Road curvature (≥1.0, inverted: higher curvature = lower cost)
+        """
+        time_weight = self.config["time_weight"]
+        poi_weight = self.config["poi_weight"]
+        scenic_weight = self.config["scenic_weight"]
+        curvature_weight = self.config["curvature_weight"]
 
-        # Normalize scenic_rating: 0-5 scale, higher is better
-        # Invert for cost: higher scenic rating = lower cost
-        scenic_component = "(5.0 - COALESCE(scenic_rating, 2.5)) / 5.0"
+        # Normalize travel time (seconds to minutes)
+        time_component = "cost_time / 60.0"
 
-        # Normalize curvature: 0-1 scale, higher is more winding
-        # Invert for cost: more curvature = lower cost
-        curvature_component = "(1.0 - COALESCE(curvature, 0.5))"
+        # Normalize weighted POI density (0-100 scale, inverted)
+        poi_component = (
+            "(100.0 - LEAST(COALESCE(weighted_poi_density, 0) * 10, 100)) / 100.0"
+        )
 
-        # Combine with weights
+        # Normalize scenic rating (0-10 scale, inverted)
+        scenic_component = "(10.0 - COALESCE(scenic_rating, 5.0)) / 10.0"
+
+        # Normalize curvature (≥1.0, inverted)
+        curvature_component = "(2.0 - LEAST(COALESCE(curvature, 1.0), 2.0))"
+
+        # Combine weighted components
         cost_expression = (
             f"({time_component} * {time_weight}) + "
+            f"({poi_component} * {poi_weight}) + "
             f"({scenic_component} * {scenic_weight}) + "
             f"({curvature_component} * {curvature_weight})"
         )
 
+        logger.debug(f"Generated cost expression for {self.preference} preference")
         return cost_expression
 
-    def _calculate_scenic_metrics(self, segments: list[dict]) -> dict[str, float]:
-        """Calculate scenic metrics from real segment data."""
+    def _find_pois_along_route(
+        self, segments: list[dict], max_distance_m: float = 500.0
+    ) -> list[POIStop]:
+        """Find Points of Interest within specified distance of route segments."""
         if not segments:
+            logger.debug("No segments provided for POI search")
+            return []
+
+        # Extract segment IDs for database query
+        segment_ids = [seg["id"] for seg in segments]
+        try:
+            with connection.cursor() as cursor:
+                # Find POIs near any route segment, grouped and ordered by importance
+                query = """
+                SELECT
+                    poi.id,
+                    poi.name,
+                    poi.category,
+                    ST_AsText(poi.location) as location_wkt,
+                    poi.importance_score,
+                    COUNT(*) as nearby_segment_count
+                FROM gis_data_pointofinterest poi
+                INNER JOIN gis_data_roadsegment seg
+                    ON ST_DWithin(poi.location, seg.geometry, %s)
+                WHERE seg.id = ANY(%s::int[])
+                    AND poi.is_active = true
+                GROUP BY poi.id, poi.name, poi.category, poi.location,
+                 poi.importance_score
+                ORDER BY poi.importance_score DESC, nearby_segment_count DESC
+                LIMIT %s
+                """
+
+                cursor.execute(
+                    query,
+                    [
+                        max_distance_m,
+                        segment_ids,
+                        self.config["max_pois"] * 2,  # Get extras for filtering
+                    ],
+                )
+
+                pois = []
+                for row in cursor.fetchall():
+                    (
+                        poi_id,
+                        name,
+                        category,
+                        location_wkt,
+                        importance_score,
+                        segment_count,
+                    ) = row
+
+                    # Parse WKT point format to Point object
+                    if location_wkt and location_wkt.startswith("POINT"):
+                        coords = location_wkt.replace("POINT(", "").replace(")", "")
+                        lon, lat = map(float, coords.split())
+                        location = Point(lon, lat, srid=4326)
+
+                        # Calculate scenic value based on category and proximity
+                        scenic_value = self._calculate_poi_scenic_value(
+                            category, importance_score, segment_count
+                        )
+
+                        pois.append(
+                            POIStop(
+                                poi_id=poi_id,
+                                name=name,
+                                category=category,
+                                location=location,
+                                scenic_value=scenic_value,
+                            )
+                        )
+
+                # Sort by scenic value and limit to maximum allowed
+                pois.sort(key=lambda p: p.scenic_value, reverse=True)
+                selected_pois = pois[: self.config["max_pois"]]
+
+                logger.info(
+                    f"Found {len(selected_pois)} POIs near route "
+                    f"(from {len(pois)} candidates)"
+                )
+                return selected_pois
+
+        except Exception as e:
+            logger.error(f"Error finding POIs along route: {str(e)}", exc_info=True)
+            return []
+
+    def _calculate_poi_scenic_value(
+        self, category: str, importance_score: float, segment_count: int
+    ) -> float:
+        """Calculate scenic value score for a Point of Interest."""
+        # Category-specific base weights for motorcycle touring
+        category_weights = {
+            "panoramic": 3.0,
+            "mountain_pass": 3.5,
+            "twisty_road": 4.0,
+            "viewpoint": 3.0,
+            "lake": 2.5,
+            "waterfall": 2.8,
+            "castle": 2.0,
+            "vineyard": 1.8,
+            "default": 1.0,
+        }
+
+        base_weight = category_weights.get(category, category_weights["default"])
+
+        # Proximity factor: POIs closer to more route segments are better
+        # Max 2x bonus for POIs very close to route
+        proximity_factor = min(segment_count / 3.0, 2.0)
+
+        scenic_value = base_weight * importance_score * proximity_factor
+        return round(scenic_value, 2)
+
+    def _calculate_route_scenic_metrics(self, segments: list[dict]) -> dict[str, float]:
+        """Calculate comprehensive scenic metrics for a complete route."""
+        if not segments:
+            logger.debug("No segments provided for scenic metrics calculation")
             return {
                 "total_scenic_score": 0.0,
                 "avg_scenic_rating": 0.0,
-                "total_curvature": 0.0,
-                "avg_curvature": 0.0,
-                "weighted_scenic_score": 0.0,
-                "segment_count": 0,
+                "total_poi_density": 0.0,
+                "avg_curvature": 1.0,
+                "scenic_segment_count": 0,
+                "scenic_percentage": 0.0,
+                "total_segments": 0,
+                "total_length_km": 0.0,
             }
 
-        total_length = 0.0
+        total_length_m = 0.0
         total_scenic = 0.0
+        total_poi_density = 0.0
         total_curvature = 0.0
-        weighted_scenic = 0.0
+        scenic_segment_count = 0
 
+        # Calculate weighted sums (weighted by segment length)
         for segment in segments:
-            length = segment.get("length_m", 0)
-            scenic_rating = segment.get("scenic_rating", 0.0)
-            curvature = segment.get("curvature", 0.0)
+            length_m = segment.get("length_m", 0)
+            scenic_rating = segment.get("scenic_rating", 5.0)  # Default 5/10
+            poi_density = segment.get("poi_density", 0.0)
+            curvature = segment.get("curvature", 1.0)  # Default 1.0 (straight)
 
-            # Use default values if None
-            if scenic_rating is None:
-                scenic_rating = 2.5
-            if curvature is None:
-                curvature = 0.5
-            total_length += length
-            total_scenic += scenic_rating * length
-            total_curvature += curvature * length
-            weighted_scenic += (scenic_rating * curvature) * length
+            total_length_m += length_m
+            total_scenic += scenic_rating * length_m
+            total_poi_density += poi_density * length_m
+            total_curvature += curvature * length_m
 
-        # Calculate averages weighted by segment length
-        avg_scenic = total_scenic / total_length if total_length > 0 else 0.0
-        avg_curvature = total_curvature / total_length if total_length > 0 else 0.0
+            # Count segments with high scenic rating (≥6/10)
+            if scenic_rating >= 6.0:
+                scenic_segment_count += 1
+
+        # Calculate weighted averages
+        total_length_km = total_length_m / 1000
+        avg_scenic = total_scenic / total_length_m if total_length_m > 0 else 0.0
+        avg_poi_density = (
+            total_poi_density / total_length_m if total_length_m > 0 else 0.0
+        )
+        avg_curvature = total_curvature / total_length_m if total_length_m > 0 else 1.0
 
         # Calculate overall scenic score (0-100 scale)
-        # Based on real scenic_rating (0-5) and curvature (0-1)
-        scenic_score = (avg_scenic / 5.0 * 70) + (avg_curvature * 30)
+        # 40% from scenic rating, 40% from POI density, 20% from curvature
+        scenic_score = (
+            (avg_scenic / 10.0 * 40)
+            + (min(avg_poi_density * 10, 40))  # scenic_rating is 0-10
+            + (  # poi_density with scaling
+                (avg_curvature - 1.0) * 100
+            )  # curvature bonus (1.0 = straight)
+        )
         scenic_score = min(100.0, max(0.0, scenic_score))
 
-        # Calculate weighted scenic score
-        weighted_avg_scenic = (
-            weighted_scenic / total_length if total_length > 0 else 0.0
+        # Calculate percentage of scenic segments
+        scenic_percentage = (
+            (scenic_segment_count / len(segments) * 100) if segments else 0.0
         )
-        weighted_scenic_score = weighted_avg_scenic / 5.0 * 100
 
-        return {
-            "total_scenic_score": scenic_score,
-            "weighted_scenic_score": weighted_scenic_score,
-            "avg_scenic_rating": avg_scenic,
-            "total_curvature": total_curvature,
-            "avg_curvature": avg_curvature,
-            "segment_count": len(segments),
-            "total_length_m": total_length,
+        metrics = {
+            "total_scenic_score": round(scenic_score, 1),
+            "avg_scenic_rating": round(avg_scenic, 2),
+            "total_poi_density": round(avg_poi_density, 2),
+            "avg_curvature": round(avg_curvature, 3),
+            "total_length_km": round(total_length_km, 2),
+            "scenic_segment_count": scenic_segment_count,
+            "scenic_percentage": round(scenic_percentage, 1),
+            "total_segments": len(segments),
         }
 
-    def _execute_scenic_dijkstra_query(
+        logger.debug(f"Calculated scenic metrics: {metrics['total_scenic_score']}/100")
+        return metrics
+
+    def _calculate_scenic_route_basic(
         self, start_vertex: int, end_vertex: int
-    ) -> list[tuple]:
-        """Execute Dijkstra algorithm with scenic cost function."""
-        cost_expression = self.get_cost_column()
-
-        with connection.cursor() as cursor:
-            query = f"""
-            SELECT seq, path_seq, node, edge, cost, agg_cost
-            FROM pgr_dijkstra(
-                'SELECT
-                    id,
-                    source,
-                    target,
-                    {cost_expression} as cost,
-                    {cost_expression} as reverse_cost
-                 FROM gis_data_roadsegment
-                 WHERE geometry IS NOT NULL
-                 AND source IS NOT NULL
-                 AND target IS NOT NULL
-                 AND is_active = true
-                 AND highway NOT IN
-                 (''footway'', ''path'', ''cycleway'', ''steps'', ''service'')',
-                %s, %s, directed := true
-            )
-            ORDER BY seq
-            """
-            cursor.execute(query, [start_vertex, end_vertex])
-            return cursor.fetchall()
-
-    def _find_scenic_alternative_routes(
-        self, start_vertex: int, end_vertex: int, max_routes: int = 5
-    ) -> list[tuple[list[int], float]]:
-        """Find alternative scenic routes using Yen's k-shortest paths."""
-        cost_expression = self.get_cost_column()
+    ) -> list[int] | None:
+        """Calculate basic scenic route between two vertices using Dijkstra."""
+        cost_column = self.get_cost_column()
 
         try:
-            with connection.cursor() as cursor:
-                query = f"""
-                WITH paths AS (
-                    SELECT (pgr_ksp(
-                        'SELECT
-                            id,
-                            source,
-                            target,
-                            {cost_expression} as cost,
-                            {cost_expression} as reverse_cost
-                         FROM gis_data_roadsegment
-                         WHERE geometry IS NOT NULL
-                         AND source IS NOT NULL
-                         AND target IS NOT NULL
-                         AND is_active = true
-                         AND highway NOT IN
-                         (''footway'', ''path'', ''cycleway'', ''steps'', ''service'')',
-                        %s, %s, %s, directed := true
-                    )).*
+            dijkstra_result = _execute_dijkstra_query(
+                start_vertex, end_vertex, cost_column
+            )
+
+            if not dijkstra_result:
+                logger.warning(f"No Dijkstra result for {start_vertex}->{end_vertex}")
+                return None
+
+            edge_ids = _extract_edges_from_dijkstra_result(dijkstra_result)
+
+            if edge_ids:
+                logger.debug(f"Found basic scenic route with {len(edge_ids)} edges")
+                return edge_ids
+            else:
+                logger.warning(
+                    f"No edges in Dijkstra result for {start_vertex}->{end_vertex}"
                 )
-                SELECT path_id, edge, cost
-                FROM paths
-                WHERE edge != -1
-                ORDER BY path_id, seq
-                """
-
-                cursor.execute(query, [start_vertex, end_vertex, max_routes])
-                results = cursor.fetchall()
-
-                # Group edges by path_id
-                routes = {}
-                for path_id, edge, cost in results:
-                    if path_id not in routes:
-                        routes[path_id] = {"edges": [], "cost": 0.0}
-                    routes[path_id]["edges"].append(edge)
-                    routes[path_id]["cost"] += cost
-
-                # Convert to list of tuples
-                return [(data["edges"], data["cost"]) for data in routes.values()]
+                return None
 
         except Exception as e:
-            logger.error(f"Error finding alternative routes: {str(e)}")
-            return []
+            logger.error(
+                f"Error in basic scenic route calculation: {str(e)}", exc_info=True
+            )
+            return None
 
     def calculate_route(
         self, start_point: Point, end_point: Point, **kwargs
     ) -> dict | None:
-        """Calculate scenic route between two points using real data."""
+        """
+        Calculate scenic motorcycle route between two geographic points.
+
+        The algorithm:
+        - Snap start/end points to nearest road network vertices
+        - Calculate initial scenic route without POI constraints
+        - Identify high-value POIs near the route
+        - Recalculate route through selected POIs
+        - Validate against 40-minute time constraint
+        - Return complete route with metrics and POI information
+        """
         vertex_threshold = kwargs.get("vertex_threshold", self.DEFAULT_VERTEX_THRESHOLD)
         reference_fastest_time = kwargs.get("reference_fastest_time")
-        find_alternatives = kwargs.get("find_alternatives", False)
-        max_alternatives = kwargs.get("max_alternatives", 3)
+        max_time_excess_minutes = kwargs.get(
+            "max_time_excess_minutes", self.MAX_TIME_EXCESS_MINUTES
+        )
 
-        # Find nearest vertices on road network
+        logger.info(
+            f"Starting scenic route calculation ({self.preference}) "
+            f"from {start_point} to {end_point}"
+        )
+
+        # Find nearest road network vertices
         start_vertex = _find_nearest_vertex(start_point, vertex_threshold)
         end_vertex = _find_nearest_vertex(end_point, vertex_threshold)
 
         if not start_vertex or not end_vertex:
-            logger.warning("Cannot find nearest vertices for start or end point")
+            logger.warning(
+                f"Cannot find road vertices: start={start_vertex}, end={end_vertex}"
+            )
             return None
+        logger.debug(f"Found vertices: start={start_vertex}, end={end_vertex}")
 
         try:
-            if find_alternatives:
-                # Find multiple scenic routes and choose best one
-                alternative_routes = self._find_scenic_alternative_routes(
-                    start_vertex=start_vertex,
-                    end_vertex=end_vertex,
-                    max_routes=max_alternatives,
+            # Calculate initial route to identify potential POI areas
+            basic_edges = self._calculate_scenic_route_basic(start_vertex, end_vertex)
+            if not basic_edges:
+                logger.warning("No basic scenic route found")
+                return None
+
+            basic_segments = _get_segments_by_ids(basic_edges)
+            if not basic_segments:
+                logger.warning("Cannot retrieve basic route segments")
+                return None
+            logger.debug(f"Basic route has {len(basic_segments)} segments")
+
+            # Find POIs along the basic route
+            pois = self._find_pois_along_route(basic_segments)
+            logger.info(f"Identified {len(pois)} potential POIs")
+
+            # Build route through selected POIs
+            if pois:
+                # Try to include POIs in route
+                route_edges, included_pois = self._build_route_through_pois(
+                    start_vertex,
+                    end_vertex,
+                    pois,
+                    reference_fastest_time,
+                    max_time_excess_minutes,
                 )
-
-                if not alternative_routes:
-                    logger.warning("No alternative scenic routes found")
-                    return None
-
-                # Get segments for each route and calculate metrics
-                best_route = None
-                best_scenic_score = -1.0
-
-                for edge_ids, route_cost in alternative_routes:
-                    segments = _get_segments_by_ids(edge_ids)
-                    if not segments:
-                        continue
-
-                    # Calculate scenic metrics
-                    scenic_metrics = self._calculate_scenic_metrics(segments)
-                    scenic_score = scenic_metrics["weighted_scenic_score"]
-
-                    # Check time constraint if reference is provided
-                    if reference_fastest_time:
-                        route_metrics = _calculate_path_metrics(segments)
-                        route_time = route_metrics["total_time_seconds"]
-                        time_increase = (
-                            (route_time - reference_fastest_time)
-                            / reference_fastest_time
-                        ) * 100.0
-
-                        if (
-                            time_increase
-                            > self.preference_config.max_time_increase_percent
-                        ):
-                            logger.debug(
-                                f"Route exceeds time constraint: {time_increase:.1f}%"
-                            )
-                            continue
-
-                    # Track best route by scenic score
-                    if scenic_score > best_scenic_score:
-                        best_scenic_score = scenic_score
-                        best_route = (edge_ids, segments, route_cost)
-
-                if not best_route:
-                    logger.warning("No scenic routes within constraints")
-                    return None
-
-                edge_ids, segments, route_cost = best_route
-
             else:
-                # Use direct Dijkstra with scenic cost
-                dijkstra_result = self._execute_scenic_dijkstra_query(
-                    start_vertex, end_vertex
-                )
+                # No POIs found, use basic route
+                route_edges = basic_edges
+                included_pois = []
+                logger.info("No POIs found, using basic scenic route")
 
-                if not dijkstra_result:
-                    logger.warning("No Dijkstra result for scenic route")
-                    return None
+            # Get final route segments and calculate metrics
+            final_segments = _get_segments_by_ids(route_edges)
+            if not final_segments:
+                logger.warning("Cannot retrieve final route segments")
+                return None
 
-                edge_ids = _extract_edges_from_dijkstra_result(dijkstra_result)
-
-                if not edge_ids:
-                    logger.warning("No edges found in Dijkstra result")
-                    return None
-
-                segments = _get_segments_by_ids(edge_ids)
-
-                if not segments:
-                    logger.warning("Cannot retrieve segments by IDs")
-                    return None
-
-            # Calculate route metrics
-            route_metrics = _calculate_path_metrics(segments)
-            scenic_metrics = self._calculate_scenic_metrics(segments)
+            route_metrics = _calculate_path_metrics(final_segments)
+            scenic_metrics = self._calculate_route_scenic_metrics(final_segments)
 
             # Create route geometry
-            route_geometry = _create_route_geometry(segments)
+            route_geometry = _create_route_geometry(final_segments)
             polyline_encoded = _encode_linestring_to_polyline(route_geometry)
 
-            # Calculate time increase percentage if reference is provided
-            time_increase_percentage = 0.0
-            if reference_fastest_time and route_metrics["total_time_seconds"] > 0:
-                time_increase_percentage = (
-                    (route_metrics["total_time_seconds"] - reference_fastest_time)
-                    / reference_fastest_time
-                    * 100.0
+            # Validate time constraint
+            time_excess_minutes = 0.0
+            is_within_constraint = True
+
+            if reference_fastest_time and route_metrics["total_time_minutes"] > 0:
+                time_excess_minutes = (
+                    route_metrics["total_time_minutes"] - reference_fastest_time
+                )
+                is_within_constraint = time_excess_minutes <= max_time_excess_minutes
+
+                logger.info(
+                    f"Time constraint: {time_excess_minutes:.1f}min excess "
+                    f"(limit: {max_time_excess_minutes}min) - "
+                    f"{'OK' if is_within_constraint else 'EXCEEDED'}"
                 )
 
-            is_within_constraint = (
-                time_increase_percentage
-                <= self.preference_config.max_time_increase_percent
-            )
-
+            # Step 8: Assemble final result
             result = {
                 "route_type": "scenic",
                 "preference": self.preference,
-                "preference_name": self.preference_config.name,
-                "preference_description": self.preference_config.description,
+                "preference_description": self.config["description"],
                 "start_vertex": start_vertex,
                 "end_vertex": end_vertex,
+                # Route metrics
                 **route_metrics,
                 **scenic_metrics,
+                # Geometry
                 "polyline": polyline_encoded,
                 "geometry": route_geometry,
-                "segments": segments[:10],
-                "total_segments": len(segments),
+                "segments": final_segments[:10],  # First 10 segments for debugging
+                "total_segments": len(final_segments),
+                # POI information
+                "poi_stops": [poi.to_dict() for poi in included_pois],
+                "poi_count": len(included_pois),
+                # Time constraint validation
                 "time_constraint": {
-                    "max_increase_percent": self.preference_config.max_time_increase_percent,  # noqa:E501
-                    "actual_increase_percent": round(time_increase_percentage, 1),
+                    "max_excess_minutes": max_time_excess_minutes,
+                    "actual_excess_minutes": round(time_excess_minutes, 1),
                     "is_within_constraint": is_within_constraint,
-                    "reference_fastest_time": reference_fastest_time,
+                    "reference_fastest_minutes": reference_fastest_time,
                 },
+                # Configuration details
                 "cost_weights": {
-                    "time_weight": round(self.preference_config.time_weight, 3),
-                    "scenic_weight": round(self.preference_config.scenic_weight, 3),
-                    "curvature_weight": round(
-                        self.preference_config.curvature_weight, 3
-                    ),
+                    "time": self.config["time_weight"],
+                    "poi": self.config["poi_weight"],
+                    "scenic": self.config["scenic_weight"],
+                    "curvature": self.config["curvature_weight"],
+                },
+                "poi_requirements": {
+                    "min_pois": self.config["min_pois"],
+                    "max_pois": self.config["max_pois"],
+                    "actual_pois": len(included_pois),
                 },
             }
+
+            logger.info(
+                f"Scenic route complete: "
+                f"{scenic_metrics['total_scenic_score']}/100 scenic, "
+                f"{len(included_pois)} POIs, "
+                f"{route_metrics['total_distance_km']:.1f}km, "
+                f"{route_metrics['total_time_minutes']:.0f}min"
+            )
 
             return result
 
         except Exception as e:
-            logger.error(f"Error calculating scenic route: {str(e)}")
+            logger.error(f"Error calculating scenic route: {str(e)}", exc_info=True)
             return None
+
+    def _build_route_through_pois(
+        self,
+        start_vertex: int,
+        end_vertex: int,
+        pois: list[POIStop],
+        reference_fastest_time: float | None,
+        max_time_excess_minutes: float,
+    ) -> tuple[list[int], list[POIStop]]:
+        """Build route that includes specified POIs while respecting time constraint."""
+        # Sort POIs by scenic value and try different combinations
+        sorted_pois = sorted(pois, key=lambda p: p.scenic_value, reverse=True)
+
+        min_pois = self.config["min_pois"]
+        max_pois = min(self.config["max_pois"], len(sorted_pois))
+
+        logger.debug(
+            f"Trying to include {min_pois}-{max_pois} POIs from {len(pois)} candidates"
+        )
+
+        # Try different numbers of POIs (from min to max)
+        for poi_count in range(min_pois, max_pois + 1):
+            selected_pois = sorted_pois[:poi_count]
+            logger.debug(
+                f"Trying route with {poi_count} POIs: {[p.name for p in selected_pois]}"
+            )
+
+            try:
+                # Build route through selected POIs in scenic value order
+                route_edges = []
+                included_pois = []
+                current_vertex = start_vertex
+
+                for poi in selected_pois:
+                    # Find nearest vertex to POI location
+                    from .utils import _find_nearest_vertex
+
+                    poi_vertex = _find_nearest_vertex(
+                        poi.location, distance_threshold=0.01
+                    )
+
+                    if not poi_vertex:
+                        logger.debug(f"Cannot find vertex near POI: {poi.name}")
+                        continue
+
+                    # Calculate route segment to this POI
+                    segment_edges = self._calculate_scenic_route_basic(
+                        current_vertex, poi_vertex
+                    )
+                    if not segment_edges:
+                        logger.debug(f"No route to POI: {poi.name}")
+                        break
+
+                    route_edges.extend(segment_edges)
+                    included_pois.append(poi)
+                    current_vertex = poi_vertex
+
+                if not included_pois:
+                    continue
+
+                # Add final segment from last POI to destination
+                final_segment = self._calculate_scenic_route_basic(
+                    current_vertex, end_vertex
+                )
+                if not final_segment:
+                    continue
+
+                route_edges.extend(final_segment)
+
+                # Check time constraint if reference available
+                if reference_fastest_time:
+                    segments = _get_segments_by_ids(route_edges)
+                    if segments:
+                        metrics = _calculate_path_metrics(segments)
+                        route_time = metrics["total_time_minutes"]
+                        time_excess = route_time - reference_fastest_time
+
+                        if time_excess <= max_time_excess_minutes:
+                            logger.info(
+                                f"Found valid route with {len(included_pois)} POIs "
+                                f"(time excess: {time_excess:.1f}min)"
+                            )
+                            return route_edges, included_pois
+                        else:
+                            logger.debug(
+                                f"Route exceeds time constraint: "
+                                f"{time_excess:.1f}min > {max_time_excess_minutes}min"
+                            )
+
+                # If no time constraint or constraint satisfied
+                logger.info(f"Found route with {len(included_pois)} POIs")
+                return route_edges, included_pois
+
+            except Exception as e:
+                logger.debug(f"Error building route with {poi_count} POIs: {str(e)}")
+                continue
+
+        # Fallback: basic route without POIs
+        logger.warning("Could not build route with POIs within time constraint")
+        basic_edges = self._calculate_scenic_route_basic(start_vertex, end_vertex)
+        return basic_edges, [] if basic_edges else ([], [])
 
     def calculate_scenic_route(
         self,
@@ -422,8 +631,8 @@ class ScenicRoutingService(BaseRoutingService):
         reference_fastest_time: float | None = None,
         **kwargs,
     ) -> dict | None:
-        """Calculate scenic route from coordinates."""
-        # Validate coordinates
+        """Calculate scenic route from geographic coordinates."""
+        # Validate input coordinates
         for coord_name, lat, lon in [
             ("start", start_lat, start_lon),
             ("end", end_lat, end_lon),
@@ -432,10 +641,11 @@ class ScenicRoutingService(BaseRoutingService):
             if not is_valid:
                 raise ValueError(f"Invalid {coord_name} coordinates: {error_msg}")
 
+        # Convert to Point objects
         start_point = Point(start_lon, start_lat, srid=4326)
         end_point = Point(end_lon, end_lat, srid=4326)
 
-        # Calculate route
+        # Delegate to main calculation method
         return self.calculate_route(
             start_point=start_point,
             end_point=end_point,
@@ -443,7 +653,7 @@ class ScenicRoutingService(BaseRoutingService):
             **kwargs,
         )
 
-    def calculate_scenic_route_with_fastest_reference(
+    def calculate_with_fastest_reference(
         self,
         start_lat: float,
         start_lon: float,
@@ -451,10 +661,19 @@ class ScenicRoutingService(BaseRoutingService):
         end_lon: float,
         **kwargs,
     ) -> dict:
-        """Calculate scenic route with automatic fastest route reference."""
+        """
+        Calculate scenic route with automatic fastest route comparison.
+
+        This method:
+        - Calculates fastest route for baseline
+        - Calculates scenic route with time constraint
+        - Returns comparison of both routes
+        """
         from .fast_routing import FastRoutingService
 
-        # First calculate fastest route for reference
+        logger.info("Calculating scenic route with fastest reference")
+
+        # Step 1: Calculate fastest route for baseline
         fast_service = FastRoutingService()
         fastest_route = fast_service.calculate_fastest_route(
             start_lat=start_lat,
@@ -467,19 +686,19 @@ class ScenicRoutingService(BaseRoutingService):
         if not fastest_route:
             return {
                 "success": False,
-                "error": "Cannot calculate fastest route for reference",
+                "error": "Cannot calculate fastest route for comparison",
             }
 
-        fastest_time = fastest_route.get("total_time_seconds", 0)
+        fastest_minutes = fastest_route.get("total_time_minutes", 0)
+        logger.info(f"Fastest route: {fastest_minutes:.1f} minutes")
 
-        # Calculate scenic route with reference
+        # Step 2: Calculate scenic route with time constraint
         scenic_route = self.calculate_scenic_route(
             start_lat=start_lat,
             start_lon=start_lon,
             end_lat=end_lat,
             end_lon=end_lon,
-            reference_fastest_time=fastest_time,
-            find_alternatives=True,
+            reference_fastest_time=fastest_minutes,
             **kwargs,
         )
 
@@ -487,30 +706,48 @@ class ScenicRoutingService(BaseRoutingService):
             return {
                 "success": False,
                 "error": "Cannot calculate scenic route",
-                "fastest_route": fastest_route,
+                "fastest_route": {
+                    "total_time_minutes": fastest_minutes,
+                    "total_distance_km": fastest_route.get("total_distance_km", 0),
+                    "polyline": fastest_route.get("polyline", ""),
+                },
             }
 
-        # Calculate time difference
-        scenic_time = scenic_route.get("total_time_seconds", 0)
-        time_difference = scenic_time - fastest_time
-        time_difference_percent = (
-            (time_difference / fastest_time * 100) if fastest_time > 0 else 0
+        # Step 3: Calculate comparison metrics
+        scenic_minutes = scenic_route.get("total_time_minutes", 0)
+        time_excess = scenic_minutes - fastest_minutes
+        time_excess_percent = (
+            (time_excess / fastest_minutes * 100) if fastest_minutes > 0 else 0
         )
 
-        return {
+        comparison = {
             "success": True,
             "fastest_route": {
-                "total_time_seconds": fastest_time,
+                "total_time_minutes": fastest_minutes,
                 "total_distance_km": fastest_route.get("total_distance_km", 0),
-                "total_time_minutes": fastest_route.get("total_time_minutes", 0),
+                "polyline": fastest_route.get("polyline", ""),
+                "segment_count": fastest_route.get("segment_count", 0),
             },
             "scenic_route": scenic_route,
             "comparison": {
-                "time_difference_seconds": round(time_difference, 1),
-                "time_difference_minutes": round(time_difference / 60, 1),
-                "time_difference_percent": round(time_difference_percent, 1),
-                "is_within_constraint": time_difference_percent
-                <= self.preference_config.max_time_increase_percent,
-                "constraint_limit_percent": self.preference_config.max_time_increase_percent,  # noqa:E501
+                "time_excess_minutes": round(time_excess, 1),
+                "time_excess_percent": round(time_excess_percent, 1),
+                "is_within_constraint": time_excess <= self.MAX_TIME_EXCESS_MINUTES,
+                "constraint_limit_minutes": self.MAX_TIME_EXCESS_MINUTES,
+                "poi_count": scenic_route.get("poi_count", 0),
+                "scenic_score": scenic_route.get("total_scenic_score", 0),
+                "recommendation": "scenic"
+                if time_excess <= self.MAX_TIME_EXCESS_MINUTES
+                and scenic_route.get("total_scenic_score", 0) > 60
+                else "fastest",
             },
         }
+
+        logger.info(
+            f"Comparison complete: "
+            f"Scenic route +{time_excess:.1f}min ({time_excess_percent:.1f}%), "
+            f"{scenic_route.get('poi_count', 0)} POIs, "
+            f"{scenic_route.get('total_scenic_score', 0)}/100 scenic"
+        )
+
+        return comparison

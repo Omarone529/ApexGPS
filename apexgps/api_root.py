@@ -32,6 +32,9 @@ class APIRootView(APIView):
                     "calculate-benchmark": reverse(
                         "route-calculate-fastest", request=request, format=format
                     ),
+                    "calculate-scenic": reverse(
+                        "route-calculate-scenic", request=request, format=format
+                    ),
                     "my-routes": reverse(
                         "route-my-routes", request=request, format=format
                     ),
