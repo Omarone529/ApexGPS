@@ -16,6 +16,7 @@ from .serializers import (
     RouteCalculationInputSerializer,
     RouteCreateSerializer,
     RouteGeoSerializer,
+    RouteSaveFromCalculationSerializer,
     RouteSerializer,
     RouteUpdateSerializer,
     StopSerializer,
@@ -225,6 +226,21 @@ class RouteViewSet(viewsets.ModelViewSet):
                 validation_result=validation_result,
                 processing_time=processing_time,
             )
+            response_data["can_save"] = (
+                request.user.is_authenticated and not request.user.is_visitor
+            )
+
+            # Add data for possible saving
+            if response_data["can_save"]:
+                response_data["calculation_data"] = {
+                    "start_location": {"lat": start_lat, "lon": start_lon},
+                    "end_location": {"lat": end_lat, "lon": end_lon},
+                    "preference": "fast",
+                    "total_distance_km": fastest_route.get("total_distance_km", 0),
+                    "total_time_minutes": fastest_route.get("total_time_minutes", 0),
+                    "polyline": fastest_route.get("polyline", ""),
+                    "total_scenic_score": 0,  # Fast routes have no panoramic score
+                }
 
             return Response(response_data, status=status.HTTP_200_OK)
 
@@ -371,6 +387,28 @@ class RouteViewSet(viewsets.ModelViewSet):
 
             # Add processing time
             scenic_result["processing_time_ms"] = round(processing_time * 1000, 2)
+            scenic_result["can_save"] = (
+                request.user.is_authenticated and not request.user.is_visitor
+            )
+
+            # Data for possible saving
+            if scenic_result.get("can_save") and scenic_result.get("scenic_route"):
+                scenic_route_data = scenic_result["scenic_route"]
+                scenic_result["calculation_data"] = {
+                    "start_location": {"lat": start_lat, "lon": start_lon},
+                    "end_location": {"lat": end_lat, "lon": end_lon},
+                    "preference": preference,
+                    "total_distance_km": scenic_route_data.get("total_distance_km", 0),
+                    "total_time_minutes": scenic_route_data.get(
+                        "total_time_minutes", 0
+                    ),
+                    "polyline": scenic_route_data.get("polyline", ""),
+                    "total_scenic_score": scenic_route_data.get("scenic_score", 0),
+                    "avg_scenic_rating": scenic_route_data.get("avg_scenic_rating", 0),
+                    "avg_curvature": scenic_route_data.get("avg_curvature", 0),
+                    "total_poi_density": scenic_route_data.get("total_poi_density", 0),
+                    "poi_count": scenic_route_data.get("poi_count", 0),
+                }
 
             return Response(scenic_result, status=status.HTTP_200_OK)
 
@@ -394,6 +432,41 @@ class RouteViewSet(viewsets.ModelViewSet):
                     "error": f"Error calculating scenic route: {str(e)}",
                     "validation": validation_result,
                 },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    @action(
+        detail=False,
+        methods=["post"],
+        permission_classes=[permissions.IsAuthenticated],
+        url_path="save-calculated",
+    )
+    def save_calculated_route(self, request):
+        """Save a previously calculated route."""
+        serializer = RouteSaveFromCalculationSerializer(
+            data=request.data, context={"request": request}
+        )
+
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            route = serializer.save()
+            route_serializer = RouteSerializer(route, context={"request": request})
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Percorso salvato con successo",
+                    "route": route_serializer.data,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        except Exception as e:
+            logger.error(f"Error saving calculated route: {str(e)}")
+            return Response(
+                {"error": f"Errore durante il salvataggio: {str(e)}", "detail": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
