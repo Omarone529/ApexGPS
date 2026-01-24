@@ -4,7 +4,7 @@ import time
 from django.contrib import admin, messages
 from django.contrib.gis.admin import GISModelAdmin
 from django.http import HttpResponseRedirect
-from django.urls import reverse
+from django.urls import path, reverse
 
 from .models import Route, Stop
 
@@ -395,3 +395,50 @@ class StopAdmin(GISModelAdmin):
             "default_zoom": 10,
         }
     }
+
+    def get_urls(self):
+        """Add custom URLs for admin actions."""
+        urls = super().get_urls()
+
+        custom_urls = [
+            path(
+                "<path:object_id>/save-calculated/",
+                self.admin_site.admin_view(self._admin_save_calculated_view),
+                name="routes_route_save_calculated",
+            ),
+        ]
+        return custom_urls + urls
+
+    def _admin_save_calculated_view(self, request, object_id):
+        """Admin view to save a calculated route."""
+        try:
+            route = Route.objects.get(id=object_id)
+
+            # Crea una copia del percorso calcolato
+            if route.start_location and route.end_location:
+                new_route = Route.objects.create(
+                    name=f"Copia di {route.name}",
+                    owner=request.user,
+                    visibility="private",
+                    preference=route.preference,
+                    start_location=route.start_location,
+                    end_location=route.end_location,
+                    polyline=route.polyline,
+                    distance_km=route.distance_km,
+                    estimated_time_min=route.estimated_time_min,
+                    total_scenic_score=route.total_scenic_score,
+                )
+
+                messages.success(
+                    request,
+                    f"Percorso salvato come '{new_route.name}' (ID: {new_route.id})",
+                )
+            else:
+                messages.error(
+                    request, "Percorso senza coordinate, non può essere salvato"
+                )
+
+        except Route.DoesNotExist:
+            messages.error(request, "Percorso non trovato")
+
+        return HttpResponseRedirect(reverse("admin:routes_route_changelist"))

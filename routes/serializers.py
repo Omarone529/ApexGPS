@@ -16,6 +16,7 @@ __all__ = [
     "RouteCalculationInputSerializer",
     "RouteCalculationResultSerializer",
     "RouteCalculationResponseSerializer",
+    "RouteSaveFromCalculationSerializer",
 ]
 
 
@@ -552,3 +553,112 @@ class RouteCalculationResponseSerializer(serializers.Serializer):
     processing_time_ms = serializers.FloatField(
         help_text="Processing time in milliseconds"
     )
+
+
+class RouteSaveFromCalculationSerializer(serializers.Serializer):
+    """
+    Serializer for saving a previously calculated route.
+    Accepts the calculation data and creates a new route in the database.
+    """
+
+    name = serializers.CharField(
+        max_length=255, required=True, help_text="Nome del percorso"
+    )
+    visibility = serializers.ChoiceField(
+        choices=[
+            ("private", "Privato"),
+            ("public", "Pubblico"),
+            ("link", "Condiviso con link"),
+        ],
+        required=True,
+        help_text="Visibilità del percorso",
+    )
+    calculation_data = serializers.DictField(
+        required=True, help_text="Dati del calcolo ottenuti dall'endpoint di calcolo"
+    )
+
+    def validate(self, data):
+        """Verify user permissions according to specifications."""
+        user = self.context["request"].user
+
+        if not user.is_authenticated:
+            raise serializers.ValidationError(
+                "Devi essere autenticato per salvare un percorso"
+            )
+
+        if user.is_visitor:
+            raise serializers.ValidationError(
+                "I visitatori non possono salvare itinerari. Registrati!"
+            )
+
+        if data["visibility"] != "public" and not user.can_create_private_routes():
+            raise serializers.ValidationError(
+                "Solo utenti iscritti possono creare itinerari privati"
+            )
+
+        if data["visibility"] == "public" and not user.can_publish_routes():
+            raise serializers.ValidationError(
+                "Solo utenti iscritti possono pubblicare itinerari"
+            )
+
+        # Data validation
+        calc_data = data["calculation_data"]
+        required_fields = [
+            "start_location",
+            "end_location",
+            "preference",
+            "total_distance_km",
+            "total_time_minutes",
+        ]
+        for field in required_fields:
+            if field not in calc_data:
+                raise serializers.ValidationError(
+                    f"Dati di calcolo incompleti: manca '{field}'"
+                )
+
+        # Convert locations from dict to Point
+        start_loc = calc_data["start_location"]
+        if isinstance(start_loc, dict):
+            try:
+                lat = float(start_loc.get("lat", start_loc.get("y")))
+                lon = float(start_loc.get("lon", start_loc.get("x")))
+                calc_data["start_location"] = Point(lon, lat, srid=4326)
+            except (TypeError, ValueError, KeyError) as e:
+                raise serializers.ValidationError(
+                    "Formato start_location non valido."
+                    " Usa {'lat': 45.4642, 'lon': 9.1900}"
+                ) from e
+
+        end_loc = calc_data["end_location"]
+        if isinstance(end_loc, dict):
+            try:
+                lat = float(end_loc.get("lat", end_loc.get("y")))
+                lon = float(end_loc.get("lon", end_loc.get("x")))
+                calc_data["end_location"] = Point(lon, lat, srid=4326)
+            except (TypeError, ValueError, KeyError) as e:
+                raise serializers.ValidationError(
+                    "Formato end_location non valido."
+                    " Usa {'lat': 41.9028, 'lon': 12.4964}"
+                ) from e
+
+        return data
+
+    def create(self, validated_data):
+        """Create a new route from the calculation data."""
+        user = self.context["request"].user
+        calc_data = validated_data["calculation_data"]
+
+        route = Route.objects.create(
+            name=validated_data["name"],
+            owner=user,
+            visibility=validated_data["visibility"],
+            preference=calc_data.get("preference", "balanced"),
+            start_location=calc_data["start_location"],
+            end_location=calc_data["end_location"],
+            polyline=calc_data.get("polyline", ""),
+            distance_km=calc_data["total_distance_km"],
+            estimated_time_min=calc_data["total_time_minutes"],
+            total_scenic_score=calc_data.get("total_scenic_score", 0),
+        )
+
+        return route
