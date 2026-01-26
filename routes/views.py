@@ -74,16 +74,26 @@ class RouteViewSet(viewsets.ModelViewSet):
                 | models.Q(visibility="link")
             )
 
-        # Anonymous users can only see public routes, not link-shared routes)
+        # Anonymous users can only see public routes, not link-shared routes
         return Route.objects.filter(visibility="public")
 
     def perform_create(self, serializer):
         """Perform route creation with automatic owner assignment."""
-        serializer.save(owner=self.request.user)
+        user = self.request.user
+        if user.is_authenticated:
+            serializer.save(owner=user)
+        else:
+            # For anonymous users, save without owner
+            serializer.save()
 
     @action(detail=False, methods=["get"])
     def my_routes(self, request):
         """Retrieve routes belonging to the current authenticated user."""
+        if not request.user.is_authenticated:
+            return Response(
+                {"error": "Authentication required to view your routes."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
         routes = Route.objects.filter(owner=request.user)
         serializer = self.get_serializer(routes, many=True)
         return Response(serializer.data)
@@ -125,13 +135,14 @@ class RouteViewSet(viewsets.ModelViewSet):
     @action(
         detail=False,
         methods=["post"],
-        permission_classes=[permissions.IsAuthenticatedOrReadOnly],
+        permission_classes=[permissions.AllowAny],
         url_path="calculate-fastest",
     )
     def calculate_fastest_route(self, request):
         """
         Calculate fastest route between two locations.
         Accepts location names which are automatically geocoded.
+        ACCESSIBLE TO ALL USERS (including anonymous).
         """
         start_time = time.time()
 
@@ -226,8 +237,12 @@ class RouteViewSet(viewsets.ModelViewSet):
                 validation_result=validation_result,
                 processing_time=processing_time,
             )
+
+            # Allow saving only to authenticated non-VISITOR users
             response_data["can_save"] = (
-                request.user.is_authenticated and not request.user.is_visitor
+                request.user.is_authenticated
+                and hasattr(request.user, "role")
+                and request.user.role != "VISITOR"
             )
 
             # Add data for possible saving
@@ -268,13 +283,14 @@ class RouteViewSet(viewsets.ModelViewSet):
     @action(
         detail=False,
         methods=["post"],
-        permission_classes=[permissions.IsAuthenticatedOrReadOnly],
+        permission_classes=[permissions.AllowAny],
         url_path="calculate-scenic",
     )
     def calculate_scenic_route(self, request):
         """
         Calculate scenic route between two locations.
         Accepts location names and scenic preference.
+        ACCESSIBLE TO ALL USERS (including anonymous).
         """
         start_time = time.time()
 
@@ -388,7 +404,9 @@ class RouteViewSet(viewsets.ModelViewSet):
             # Add processing time
             scenic_result["processing_time_ms"] = round(processing_time * 1000, 2)
             scenic_result["can_save"] = (
-                request.user.is_authenticated and not request.user.is_visitor
+                request.user.is_authenticated
+                and hasattr(request.user, "role")
+                and request.user.role != "VISITOR"
             )
 
             # Data for possible saving
@@ -438,11 +456,20 @@ class RouteViewSet(viewsets.ModelViewSet):
     @action(
         detail=False,
         methods=["post"],
-        permission_classes=[permissions.IsAuthenticated],
+        permission_classes=[permissions.IsAuthenticated],  # Solo utenti autenticati
         url_path="save-calculated",
     )
     def save_calculated_route(self, request):
-        """Save a previously calculated route."""
+        """Save a previously calculated route (requires authentication)."""
+        if hasattr(request.user, "role") and request.user.role == "VISITOR":
+            return Response(
+                {
+                    "error": "Utenti VISITOR non possono salvare percorsi."
+                    " Registrati per salvare."
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         serializer = RouteSaveFromCalculationSerializer(
             data=request.data, context={"request": request}
         )
