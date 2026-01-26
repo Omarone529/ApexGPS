@@ -349,12 +349,12 @@ class RouteCalculationInputSerializer(serializers.Serializer):
     start_location_name = serializers.CharField(
         required=True,
         max_length=255,
-        help_text="Start location name (e.g., 'Roma, Italia')",
+        help_text="Start location (e.g., 'Roma' or 'Milano')",
     )
     end_location_name = serializers.CharField(
         required=True,
         max_length=255,
-        help_text="End location name (e.g., 'Milano, Italia')",
+        help_text="End location (e.g., 'Firenze' or 'Napoli')",
     )
 
     vertex_threshold = serializers.FloatField(
@@ -374,55 +374,109 @@ class RouteCalculationInputSerializer(serializers.Serializer):
                 {"error": "Geocoding service not available"}
             ) from e
 
-        start_location_name = data["start_location_name"].strip()
-        end_location_name = data["end_location_name"].strip()
+        def clean_string(value):
+            if not value:
+                return value
+            value = str(value).strip()
+            if (value.startswith('"') and value.endswith('"')) or (
+                value.startswith("'") and value.endswith("'")
+            ):
+                value = value[1:-1]
+            return value.strip()
 
-        if start_location_name.startswith('"') and start_location_name.endswith('"'):
-            start_location_name = start_location_name[1:-1]
-        if end_location_name.startswith('"') and end_location_name.endswith('"'):
-            end_location_name = end_location_name[1:-1]
+        start_location_name = clean_string(data["start_location_name"])
+        end_location_name = clean_string(data["end_location_name"])
 
-        if not any(
-            word in start_location_name.lower() for word in ["italia", "italy", "it"]
-        ):
-            start_location_name = f"{start_location_name}, Italia"
+        def normalize_location(city_name):
+            city = city_name.strip()
 
-        if not any(
-            word in end_location_name.lower() for word in ["italia", "italy", "it"]
-        ):
-            end_location_name = f"{end_location_name}, Italia"
+            if not city:
+                return city
+            city_lower = city.lower()
+            country_keywords = [
+                "italia",
+                "italy",
+                "it",
+                "france",
+                "spain",
+                "germany",
+                "de",
+                "fr",
+                "es",
+            ]
+
+            if any(keyword in city_lower for keyword in country_keywords):
+                return city
+            return f"{city}, Italia"
+
+        start_location_name_normalized = normalize_location(start_location_name)
+        end_location_name_normalized = normalize_location(end_location_name)
+
+        def geocode_with_fallback(location_name, original_name, field_name):
+            try:
+                point = GeocodingService.geocode_location(location_name)
+
+                if not point:
+                    point = GeocodingService.geocode_location(original_name)
+
+                    if not point:
+                        if ", Italia" in location_name:
+                            point = GeocodingService.geocode_location(
+                                location_name.replace(", Italia", ", Italy")
+                            )
+                        elif ", Italy" in location_name:
+                            point = GeocodingService.geocode_location(
+                                location_name.replace(", Italy", ", Italia")
+                            )
+
+                if not point:
+                    fallback_variants = [
+                        original_name,
+                        f"{original_name}, Italy",
+                        f"{original_name}, IT",
+                    ]
+
+                    for variant in fallback_variants:
+                        point = GeocodingService.geocode_location(variant)
+                        if point:
+                            break
+
+                if not point:
+                    raise serializers.ValidationError(
+                        {
+                            field_name: f"Cannot find coordinates for"
+                            f" '{original_name}'. "
+                            f"Please try a different location name"
+                            f" or be more specific."
+                        }
+                    )
+
+                return point
+
+            except Exception as e:
+                raise serializers.ValidationError(
+                    {field_name: f"Geocoding error: {str(e)}"}
+                ) from e
 
         # Geocode start location
-        start_point = GeocodingService.geocode_location(start_location_name)
-
-        if not start_point:
-            raise serializers.ValidationError(
-                {
-                    "start_location_name": f"Cannot find coordinates for"
-                    f" '{start_location_name}'"
-                }
-            )
+        start_point = geocode_with_fallback(
+            start_location_name_normalized, start_location_name, "start_location_name"
+        )
 
         data["start_lat"] = start_point.y
         data["start_lon"] = start_point.x
         data["geocoded_start"] = True
-        data["start_location_name"] = start_location_name
+        data["start_location_name"] = start_location_name_normalized
 
         # Geocode end location
-        end_point = GeocodingService.geocode_location(end_location_name)
-
-        if not end_point:
-            raise serializers.ValidationError(
-                {
-                    "end_location_name": f"Cannot find coordinates for"
-                    f" '{end_location_name}'"
-                }
-            )
+        end_point = geocode_with_fallback(
+            end_location_name_normalized, end_location_name, "end_location_name"
+        )
 
         data["end_lat"] = end_point.y
         data["end_lon"] = end_point.x
         data["geocoded_end"] = True
-        data["end_location_name"] = end_location_name
+        data["end_location_name"] = end_location_name_normalized
 
         # Italy bounds check
         ITALY_BOUNDS = {
