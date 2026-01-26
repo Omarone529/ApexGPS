@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     "corsheaders",
     # Local apps
     "users.apps.UsersConfig",
+    "authentication.apps.AuthenticationConfig",
     "gis_data.apps.GisDataConfig",
     "dem_data_loader.apps.DemDataLoaderConfig",
     "routes.apps.RoutesConfig",
@@ -145,12 +146,13 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.AllowAny",
     ],
     "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
         "rest_framework.authentication.SessionAuthentication",
         "rest_framework.authentication.BasicAuthentication",
     ],
 }
 
-# CORS Configuration
+
 CORS_ALLOWED_ORIGINS = [
     origin
     for origin in [

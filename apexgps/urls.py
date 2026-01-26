@@ -32,5 +32,8 @@ urlpatterns = [
     path("api/dem/", include("dem_data_loader.urls")),
     path("api/", include("routes.urls")),
     # auth
-    path("api/auth/", include("rest_framework.urls")),
+    path("api/auth/", include("authentication.urls")),
+    path("api-auth/", include("rest_framework.urls")),
+
+
 ]
