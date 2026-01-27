@@ -11,6 +11,7 @@ from .utils import (
     _execute_dijkstra_query,
     _extract_edges_from_dijkstra_result,
     _find_nearest_vertex,
+    _get_secondary_road_percentage,
     _get_segments_by_ids,
     _validate_coordinates,
 )
@@ -68,6 +69,11 @@ class ScenicRoutingService(BaseRoutingService):
     # Maximum time increase vs fastest route (40 minutes absolute)
     MAX_TIME_EXCESS_MINUTES = 40.0
 
+    # Added limits to avoid excessive deviations
+    MAX_POI_DISTANCE_M = 2500.0
+    MIN_POI_SCENIC_VALUE = 2.0
+    MAX_DETOUR_FACTOR = 1.4
+
     # Configuration for different scenic preference levels
     PREFERENCE_CONFIGS = {
         "fast": {
@@ -76,7 +82,8 @@ class ScenicRoutingService(BaseRoutingService):
             "scenic_weight": 0.08,
             "curvature_weight": 0.02,
             "min_pois": 1,
-            "max_pois": 10,
+            "max_pois": 6,
+            "max_poi_distance_m": 1500.0,
             "description": "Fast scenic route with minimal POI stops",
         },
         "balanced": {
@@ -84,8 +91,9 @@ class ScenicRoutingService(BaseRoutingService):
             "poi_weight": 0.30,
             "scenic_weight": 0.15,
             "curvature_weight": 0.05,
-            "min_pois": 2,
-            "max_pois": 5,
+            "min_pois": 1,  # Ridotto da 2 a 1 (può essere 0)
+            "max_pois": 4,  # Ridotto da 5 a 4
+            "max_poi_distance_m": 2000.0,  # Aggiunto
             "description": "Balanced mix of speed, scenery, and POI stops",
         },
         "most_winding": {
@@ -95,6 +103,7 @@ class ScenicRoutingService(BaseRoutingService):
             "curvature_weight": 0.25,
             "min_pois": 3,
             "max_pois": 8,
+            "max_poi_distance_m": 2500.0,
             "description": "Emphasizes winding roads and maximum POI stops",
         },
     }
@@ -162,7 +171,7 @@ class ScenicRoutingService(BaseRoutingService):
         segment_ids = [seg["id"] for seg in segments]
         try:
             with connection.cursor() as cursor:
-                # Find POIs near any route segment, grouped and ordered by importance
+                # Modificata query per includere distanza e filtrare POI troppo lontani
                 query = """
                 SELECT
                     poi.id,
@@ -170,24 +179,29 @@ class ScenicRoutingService(BaseRoutingService):
                     poi.category,
                     ST_AsText(poi.location) as location_wkt,
                     poi.importance_score,
-                    COUNT(*) as nearby_segment_count
+                    COUNT(*) as nearby_segment_count,
+                    MIN(ST_Distance(poi.location, seg.geometry)) as min_distance
                 FROM gis_data_pointofinterest poi
                 INNER JOIN gis_data_roadsegment seg
                     ON ST_DWithin(poi.location, seg.geometry, %s)
                 WHERE seg.id = ANY(%s::int[])
                     AND poi.is_active = true
-                GROUP BY poi.id, poi.name, poi.category, poi.location,
-                 poi.importance_score
-                ORDER BY poi.importance_score DESC, nearby_segment_count DESC
+                GROUP BY poi.id, poi.name, poi.category,
+                 poi.location, poi.importance_score
+                HAVING MIN(ST_Distance(poi.location, seg.geometry)) <= %s
+                    AND poi.importance_score >= %s
+                ORDER BY poi.importance_score DESC, min_distance ASC
                 LIMIT %s
                 """
 
                 cursor.execute(
                     query,
                     [
-                        max_distance_m,
+                        max_distance_m * 2,
                         segment_ids,
-                        self.config["max_pois"] * 2,  # Get extras for filtering
+                        self.config.get("max_poi_distance_m", self.MAX_POI_DISTANCE_M),
+                        self.MIN_POI_SCENIC_VALUE,
+                        self.config["max_pois"] * 3,  # Get more for filtering
                     ],
                 )
 
@@ -200,6 +214,7 @@ class ScenicRoutingService(BaseRoutingService):
                         location_wkt,
                         importance_score,
                         segment_count,
+                        min_distance,
                     ) = row
 
                     # Parse WKT point format to Point object
@@ -208,9 +223,9 @@ class ScenicRoutingService(BaseRoutingService):
                         lon, lat = map(float, coords.split())
                         location = Point(lon, lat, srid=4326)
 
-                        # Calculate scenic value based on category and proximity
+                        # Calculate scenic value with distance penalty
                         scenic_value = self._calculate_poi_scenic_value(
-                            category, importance_score, segment_count
+                            category, importance_score, segment_count, min_distance
                         )
 
                         pois.append(
@@ -228,7 +243,7 @@ class ScenicRoutingService(BaseRoutingService):
                 selected_pois = pois[: self.config["max_pois"]]
 
                 logger.info(
-                    f"Found {len(selected_pois)} POIs near route "
+                    f"Found {len(selected_pois)} valid POIs near route "
                     f"(from {len(pois)} candidates)"
                 )
                 return selected_pois
@@ -238,10 +253,13 @@ class ScenicRoutingService(BaseRoutingService):
             return []
 
     def _calculate_poi_scenic_value(
-        self, category: str, importance_score: float, segment_count: int
+        self,
+        category: str,
+        importance_score: float,
+        segment_count: int,
+        distance_m: float = 0.0,
     ) -> float:
         """Calculate scenic value score for a Point of Interest."""
-        # Category-specific base weights for motorcycle touring
         category_weights = {
             "panoramic": 3.0,
             "mountain_pass": 3.5,
@@ -260,11 +278,25 @@ class ScenicRoutingService(BaseRoutingService):
         # Max 2x bonus for POIs very close to route
         proximity_factor = min(segment_count / 3.0, 2.0)
 
-        scenic_value = base_weight * importance_score * proximity_factor
+        max_allowed_distance = self.config.get(
+            "max_poi_distance_m", self.MAX_POI_DISTANCE_M
+        )
+        distance_penalty = 1.0 - min(distance_m / max_allowed_distance, 0.5)
+
+        scenic_value = (
+            base_weight * importance_score * proximity_factor * distance_penalty
+        )
         return round(scenic_value, 2)
 
     def _calculate_route_scenic_metrics(self, segments: list[dict]) -> dict[str, float]:
-        """Calculate comprehensive scenic metrics for a complete route."""
+        """
+        Calculate comprehensive scenic metrics for a complete route.
+        Calculate overall scenic score (0-100 scale)
+        35% from scenic rating
+        35% from POI density
+        20% from curvature
+        10% from secondary roads.
+        """
         if not segments:
             logger.debug("No segments provided for scenic metrics calculation")
             return {
@@ -308,14 +340,15 @@ class ScenicRoutingService(BaseRoutingService):
         )
         avg_curvature = total_curvature / total_length_m if total_length_m > 0 else 1.0
 
-        # Calculate overall scenic score (0-100 scale)
-        # 40% from scenic rating, 40% from POI density, 20% from curvature
+        # Calculate secondary road percentage using utility function
+        secondary_road_percent = _get_secondary_road_percentage(segments)
         scenic_score = (
-            (avg_scenic / 10.0 * 40)
-            + (min(avg_poi_density * 10, 40))  # scenic_rating is 0-10
-            + (  # poi_density with scaling
-                (avg_curvature - 1.0) * 100
-            )  # curvature bonus (1.0 = straight)
+            (avg_scenic / 10.0 * 35)
+            + (min(avg_poi_density * 10, 35))  # scenic_rating is 0-10
+            + ((avg_curvature - 1.0) * 100 * 0.2)  # poi_density with scaling
+            + (  # curvature bonus (1.0 = straight)
+                secondary_road_percent * 0.1
+            )  # bonus for secondary roads
         )
         scenic_score = min(100.0, max(0.0, scenic_score))
 
@@ -333,6 +366,7 @@ class ScenicRoutingService(BaseRoutingService):
             "scenic_segment_count": scenic_segment_count,
             "scenic_percentage": round(scenic_percentage, 1),
             "total_segments": len(segments),
+            "secondary_road_percent": round(secondary_road_percent, 1),
         }
 
         logger.debug(f"Calculated scenic metrics: {metrics['total_scenic_score']}/100")
@@ -419,25 +453,29 @@ class ScenicRoutingService(BaseRoutingService):
                 return None
             logger.debug(f"Basic route has {len(basic_segments)} segments")
 
+            # Calculate basic route metrics for comparison
+            basic_metrics = _calculate_path_metrics(basic_segments)
+            basic_time = basic_metrics.get("total_time_minutes", 0)
+
             # Find POIs along the basic route
             pois = self._find_pois_along_route(basic_segments)
             logger.info(f"Identified {len(pois)} potential POIs")
 
-            # Build route through selected POIs
             if pois:
-                # Try to include POIs in route
+                # Try to include POIs in route with time constraint check
                 route_edges, included_pois = self._build_route_through_pois(
                     start_vertex,
                     end_vertex,
                     pois,
                     reference_fastest_time,
                     max_time_excess_minutes,
+                    basic_time,
                 )
             else:
                 # No POIs found, use basic route
                 route_edges = basic_edges
                 included_pois = []
-                logger.info("No POIs found, using basic scenic route")
+                logger.info("No valid POIs found, using basic scenic route")
 
             # Get final route segments and calculate metrics
             final_segments = _get_segments_by_ids(route_edges)
@@ -528,6 +566,7 @@ class ScenicRoutingService(BaseRoutingService):
         pois: list[POIStop],
         reference_fastest_time: float | None,
         max_time_excess_minutes: float,
+        basic_route_time: float = 0.0,
     ) -> tuple[list[int], list[POIStop]]:
         """Build route that includes specified POIs while respecting time constraint."""
         # Sort POIs by scenic value and try different combinations
@@ -539,6 +578,11 @@ class ScenicRoutingService(BaseRoutingService):
         logger.debug(
             f"Trying to include {min_pois}-{max_pois} POIs from {len(pois)} candidates"
         )
+
+        # Calculate basic route without POIs for comparison
+        basic_edges = self._calculate_scenic_route_basic(start_vertex, end_vertex)
+        if not basic_edges:
+            return [], []
 
         # Try different numbers of POIs (from min to max)
         for poi_count in range(min_pois, max_pois + 1):
@@ -597,30 +641,54 @@ class ScenicRoutingService(BaseRoutingService):
                         route_time = metrics["total_time_minutes"]
                         time_excess = route_time - reference_fastest_time
 
-                        if time_excess <= max_time_excess_minutes:
+                        # Calculate detour factor compared to basic route
+                        detour_factor = (
+                            route_time / basic_route_time
+                            if basic_route_time > 0
+                            else 1.0
+                        )
+                        time_ok = time_excess <= max_time_excess_minutes
+                        detour_ok = detour_factor <= self.MAX_DETOUR_FACTOR
+
+                        if time_ok and detour_ok:
                             logger.info(
                                 f"Found valid route with {len(included_pois)} POIs "
-                                f"(time excess: {time_excess:.1f}min)"
+                                f"(time excess: {time_excess:.1f}min"
+                                f" detour: {detour_factor:.2f}x)"
                             )
                             return route_edges, included_pois
                         else:
                             logger.debug(
-                                f"Route exceeds time constraint: "
-                                f"{time_excess:.1f}min > {max_time_excess_minutes}min"
+                                f"Route fails constraints: "
+                                f"time {'OK' if time_ok else f'+{time_excess:.1f}min > {max_time_excess_minutes}min'}, "  # noqa: E501
+                                f"detour {'OK' if detour_ok else f'{detour_factor:.2f}x > {self.MAX_DETOUR_FACTOR}x'}"  # noqa: E501
                             )
+                else:
+                    # If no time constraint, check only detour factor
+                    segments = _get_segments_by_ids(route_edges)
+                    if segments:
+                        metrics = _calculate_path_metrics(segments)
+                        route_time = metrics["total_time_minutes"]
+                        detour_factor = (
+                            route_time / basic_route_time
+                            if basic_route_time > 0
+                            else 1.0
+                        )
 
-                # If no time constraint or constraint satisfied
-                logger.info(f"Found route with {len(included_pois)} POIs")
-                return route_edges, included_pois
+                        if detour_factor <= self.MAX_DETOUR_FACTOR:
+                            logger.info(
+                                f"Found route with {len(included_pois)}"
+                                f" POIs (detour: {detour_factor:.2f}x)"
+                            )
+                            return route_edges, included_pois
 
             except Exception as e:
                 logger.debug(f"Error building route with {poi_count} POIs: {str(e)}")
                 continue
 
         # Fallback: basic route without POIs
-        logger.warning("Could not build route with POIs within time constraint")
-        basic_edges = self._calculate_scenic_route_basic(start_vertex, end_vertex)
-        return basic_edges, [] if basic_edges else ([], [])
+        logger.warning("Could not build route with POIs within constraints")
+        return basic_edges, []
 
     def calculate_scenic_route(
         self,
