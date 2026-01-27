@@ -584,6 +584,10 @@ class ScenicRoutingService(BaseRoutingService):
         if not basic_edges:
             return [], []
 
+        best_route_edges = basic_edges
+        best_pois = []
+        best_score = 0.0
+
         # Try different numbers of POIs (from min to max)
         for poi_count in range(min_pois, max_pois + 1):
             selected_pois = sorted_pois[:poi_count]
@@ -599,8 +603,6 @@ class ScenicRoutingService(BaseRoutingService):
 
                 for poi in selected_pois:
                     # Find nearest vertex to POI location
-                    from .utils import _find_nearest_vertex
-
                     poi_vertex = _find_nearest_vertex(
                         poi.location, distance_threshold=0.01
                     )
@@ -633,62 +635,54 @@ class ScenicRoutingService(BaseRoutingService):
 
                 route_edges.extend(final_segment)
 
+                segments = _get_segments_by_ids(route_edges)
+                if not segments:
+                    continue
+
+                metrics = _calculate_path_metrics(segments)
+                route_time = metrics["total_time_minutes"]
+
+                # Calculate detour factor
+                detour_factor = (
+                    route_time / basic_route_time if basic_route_time > 0 else 1.0
+                )
+
                 # Check time constraint if reference available
+                time_ok = True
                 if reference_fastest_time:
-                    segments = _get_segments_by_ids(route_edges)
-                    if segments:
-                        metrics = _calculate_path_metrics(segments)
-                        route_time = metrics["total_time_minutes"]
-                        time_excess = route_time - reference_fastest_time
+                    time_excess = route_time - reference_fastest_time
+                    time_ok = time_excess <= max_time_excess_minutes
 
-                        # Calculate detour factor compared to basic route
-                        detour_factor = (
-                            route_time / basic_route_time
-                            if basic_route_time > 0
-                            else 1.0
-                        )
-                        time_ok = time_excess <= max_time_excess_minutes
-                        detour_ok = detour_factor <= self.MAX_DETOUR_FACTOR
+                # Check detour constraint
+                detour_ok = detour_factor <= self.MAX_DETOUR_FACTOR
 
-                        if time_ok and detour_ok:
-                            logger.info(
-                                f"Found valid route with {len(included_pois)} POIs "
-                                f"(time excess: {time_excess:.1f}min"
-                                f" detour: {detour_factor:.2f}x)"
-                            )
-                            return route_edges, included_pois
-                        else:
-                            logger.debug(
-                                f"Route fails constraints: "
-                                f"time {'OK' if time_ok else f'+{time_excess:.1f}min > {max_time_excess_minutes}min'}, "  # noqa: E501
-                                f"detour {'OK' if detour_ok else f'{detour_factor:.2f}x > {self.MAX_DETOUR_FACTOR}x'}"  # noqa: E501
-                            )
-                else:
-                    # If no time constraint, check only detour factor
-                    segments = _get_segments_by_ids(route_edges)
-                    if segments:
-                        metrics = _calculate_path_metrics(segments)
-                        route_time = metrics["total_time_minutes"]
-                        detour_factor = (
-                            route_time / basic_route_time
-                            if basic_route_time > 0
-                            else 1.0
-                        )
+                # Calculate route scenic score
+                scenic_metrics = self._calculate_route_scenic_metrics(segments)
+                route_score = scenic_metrics["total_scenic_score"]
 
-                        if detour_factor <= self.MAX_DETOUR_FACTOR:
-                            logger.info(
-                                f"Found route with {len(included_pois)}"
-                                f" POIs (detour: {detour_factor:.2f}x)"
-                            )
-                            return route_edges, included_pois
+                # Update best route if this one is better
+                if time_ok and detour_ok and route_score > best_score:
+                    best_score = route_score
+                    best_route_edges = route_edges
+                    best_pois = included_pois
+                    logger.debug(f"New best route found with score {route_score}")
 
             except Exception as e:
                 logger.debug(f"Error building route with {poi_count} POIs: {str(e)}")
                 continue
 
-        # Fallback: basic route without POIs
-        logger.warning("Could not build route with POIs within constraints")
-        return basic_edges, []
+        # Return the best route found
+        if best_pois:
+            logger.info(
+                f"Selected optimal route with {len(best_pois)} POIs,"
+                f" scenic score: {best_score}"
+            )
+            return best_route_edges, best_pois
+        else:
+            logger.warning(
+                "No valid POI routes found within constraints, using basic scenic route"
+            )
+            return basic_edges, []
 
     def calculate_scenic_route(
         self,
