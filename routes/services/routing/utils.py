@@ -23,6 +23,11 @@ __all__ = [
     "_get_segments_with_scenic_data",
     "_calculate_route_scenic_stats",
     "_compare_routes_scenic_quality",
+    "_is_secondary_road",
+    "_calculate_segment_secondary_length",
+    "_calculate_total_route_length",
+    "_calculate_secondary_road_length",
+    "_get_secondary_road_percentage",
 ]
 
 
@@ -567,3 +572,65 @@ def _compare_routes_scenic_quality(
         if score2 > score1
         else "equal",
     }
+
+
+def _is_secondary_road(highway_type: str) -> bool:
+    """Check if a highway type is considered a secondary road for scenic routing."""
+    secondary_types = {
+        "secondary",
+        "tertiary",
+        "unclassified",
+        "road",
+        "track",
+        "path",
+        "service",
+        "residential",
+        "living_street",
+    }
+    return highway_type in secondary_types
+
+
+def _calculate_segment_secondary_length(segment: dict) -> float:
+    """Calculate the length of a segment if it's a secondary road."""
+    length = segment.get("length_m", 0)
+    highway = segment.get("highway", "")
+
+    if _is_secondary_road(highway):
+        return length
+    return 0.0
+
+
+def _calculate_total_route_length(segments: list[dict]) -> float:
+    """Calculate total length of all route segments in meters."""
+    if not segments:
+        return 0.0
+
+    total_length = 0.0
+    for segment in segments:
+        total_length += segment.get("length_m", 0)
+    return total_length
+
+
+def _calculate_secondary_road_length(segments: list[dict]) -> float:
+    """Calculate total length of secondary road segments in meters."""
+    if not segments:
+        return 0.0
+
+    secondary_length = 0.0
+    for segment in segments:
+        secondary_length += _calculate_segment_secondary_length(segment)
+    return secondary_length
+
+
+def _get_secondary_road_percentage(segments: list[dict]) -> float:
+    """Calculate percentage of route that uses secondary roads."""
+    if not segments:
+        return 0.0
+
+    total_length = _calculate_total_route_length(segments)
+    secondary_length = _calculate_secondary_road_length(segments)
+
+    if total_length == 0:
+        return 0.0
+
+    return (secondary_length / total_length) * 100
