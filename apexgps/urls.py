@@ -26,14 +26,11 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     # API root
     path("api/", APIRootView.as_view(), name="api-root"),
-    # apps
+
+    # Apps
     path("api/users/", include("users.urls")),
     path("api/gis/", include("gis_data.urls")),
     path("api/dem/", include("dem_data_loader.urls")),
     path("api/", include("routes.urls")),
-    # auth
-    path("api/auth/", include("authentication.urls")),
     path("api-auth/", include("rest_framework.urls")),
-
-
 ]

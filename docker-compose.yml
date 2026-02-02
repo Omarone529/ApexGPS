@@ -31,6 +31,7 @@ services:
       sh -c "
         sleep 5 &&
         python manage.py migrate &&
+        python manage.py load_operational_dataset --verbose &&
         python manage.py runserver 0.0.0.0:8000
       "
     environment:
@@ -46,6 +47,8 @@ services:
       OSM_URL_CH: ${OSM_URL_CH}
       LOCAL_PATH1: ${LOCAL_PATH1}
       LOCAL_PATH2: ${LOCAL_PATH2}
+      REACT_SERVER: ${REACT_SERVER}
+      CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS}
       INIT_AREA: italy
       NOMINATIM_URL: ${NOMINATIM_URL}
       PYTHONMALLOC: malloc

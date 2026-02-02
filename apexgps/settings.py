@@ -26,7 +26,7 @@ SECRET_KEY = "django-insecure-ug9-2*a923403=rk9##2ng-+rp)xq(fx8p@ayp0=l-wphkbn^a
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 
 
 # Application definition
@@ -39,23 +39,22 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    # Third part apps
+    # third-party apps
     "corsheaders",
     "rest_framework",
     "django.contrib.gis",
     "django_filters",
     # Local apps
     "users.apps.UsersConfig",
-    "authentication.apps.AuthenticationConfig",
     "gis_data.apps.GisDataConfig",
     "dem_data_loader.apps.DemDataLoaderConfig",
     "routes.apps.RoutesConfig",
 ]
 
 MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
-    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -147,6 +146,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.AllowAny",
+        "rest_framework.permissions.IsAuthenticated",
     ],
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework_simplejwt.authentication.JWTAuthentication",
@@ -156,10 +156,45 @@ REST_FRAMEWORK = {
 }
 
 
+# CORS Configuration
+def _split_env(name: str):
+    v = os.environ.get(name, "")
+    return [x.strip() for x in v.split(",") if x.strip()]
+
+CSRF_TRUSTED_ORIGINS = _split_env("CSRF_TRUSTED_ORIGINS")
+
+
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
+    origin
+    for origin in [
+        os.environ.get("LOCAL_PATH1"),
+        os.environ.get("LOCAL_PATH2"),
+        os.environ.get("REACT_SERVER"),
+    ]
+    if origin
+]
+
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_ALL_ORIGINS = DEBUG
+
+CORS_ALLOW_METHODS = [
+    "DELETE",
+    "GET",
+    "OPTIONS",
+    "PATCH",
+    "POST",
+    "PUT",
+]
+
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "accept-encoding",
+    "authorization",
+    "content-type",
+    "dnt",
+    "origin",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
 ]
 
