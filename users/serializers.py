@@ -9,7 +9,6 @@ class CustomUserSerializer(serializers.ModelSerializer):
     Includes role-based permission flags for client applications.
     """
 
-    is_visitor = serializers.BooleanField(read_only=True)
     is_subscribed = serializers.BooleanField(read_only=True)
     is_administrator = serializers.BooleanField(read_only=True)
     can_create_routes = serializers.BooleanField(read_only=True)
@@ -28,7 +27,6 @@ class CustomUserSerializer(serializers.ModelSerializer):
             "first_name",
             "last_name",
             "is_superuser",
-            "is_visitor",
             "is_subscribed",
             "is_administrator",
             "can_create_routes",
@@ -61,7 +59,6 @@ class CustomUserSerializer(serializers.ModelSerializer):
         representation = super().to_representation(instance)
 
         # Add permission flags based on user role
-        representation["is_visitor"] = instance.is_visitor
         representation["is_subscribed"] = instance.is_subscribed
         representation["is_administrator"] = instance.is_administrator
         representation["can_create_routes"] = instance.can_create_private_routes()
