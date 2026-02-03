@@ -4,9 +4,8 @@ from django.utils.translation import gettext_lazy as _
 
 
 class UserRoles(models.TextChoices):
-    """Defines the available roles for users in ApexGPS using Enums."""
+    """Defines the available roles for authenticated users in ApexGPS."""
 
-    VISITOR = "VISITOR", _("Visitatore (Non autenticato)")
     SUBSCRIBED = "SUBSCRIBED", _("Utente Registrato")
     ADMIN = "ADMIN", _("Amministratore")
 
@@ -53,11 +52,6 @@ class CustomUser(AbstractUser):
     def __str__(self):
         """Returns the username and their current role."""
         return f"{self.username} ({self.get_role_display()})"
-
-    @property
-    def is_visitor(self):
-        """Check if user has visitor role."""
-        return self.role == UserRoles.VISITOR
 
     @property
     def is_subscribed(self):
