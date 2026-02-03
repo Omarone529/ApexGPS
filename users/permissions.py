@@ -20,7 +20,7 @@ class BaseRolePermission(permissions.BasePermission):
         return request.user.role in self.allowed_roles
 
 
-class IsSubscribedUser(BaseRolePermission):
+class IsRegisteredUser(BaseRolePermission):
     """
     Permission class that allows access only to SUBSCRIBED or ADMIN users.
     Use this for endpoints that require registered user privileges.
