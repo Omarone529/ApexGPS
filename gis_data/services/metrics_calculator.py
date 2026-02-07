@@ -1,5 +1,12 @@
 from django.db import connection
+import time
+import logging
 
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "MetricsCalculator"
+]
 
 class MetricsCalculator:
     """
@@ -107,45 +114,182 @@ class MetricsCalculator:
     @staticmethod
     def _update_poi_density():
         """Calculate and update POI density within 1km buffer."""
+
+        # Process 5000 segments at a time
+        batch_size = 5000
+        total_updated = 0
+
         with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                UPDATE gis_data_roadsegment rs
-                SET poi_density = (
-                    SELECT COUNT(*)::float / GREATEST(rs.length_m, 1000)
-                    FROM gis_data_pointofinterest poi
-                    WHERE ST_DWithin(
-                        rs.geometry::geography,
-                        poi.location::geography,
-                        1000
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM gis_data_roadsegment 
+                WHERE geometry IS NOT NULL 
+                AND (poi_density = 0 OR poi_density IS NULL)
+            """)
+            total_to_process = cursor.fetchone()[0]
+
+            if total_to_process == 0:
+                logger.info("No segments need POI density calculation")
+                return 0
+
+            logger.info(
+                f"Starting POI density calculation for {total_to_process:,} segments (batch size: {batch_size})")
+
+            # Get approximate segments per minute
+            start_time = time.time()
+
+            # Process in batches
+            for offset in range(0, total_to_process, batch_size):
+                batch_start = time.time()
+
+                cursor.execute(f"""
+                    -- Process one batch of segments
+                    WITH batch_segments AS (
+                        SELECT id, geometry, length_m
+                        FROM gis_data_roadsegment
+                        WHERE geometry IS NOT NULL
+                        AND (poi_density = 0 OR poi_density IS NULL)
+                        ORDER BY id
+                        LIMIT {batch_size} OFFSET {offset}
+                    ),
+                    segment_densities AS (
+                        SELECT 
+                            bs.id,
+                            COUNT(poi.id)::float / GREATEST(bs.length_m, 1000.0) as density
+                        FROM batch_segments bs
+                        LEFT JOIN gis_data_pointofinterest poi ON ST_DWithin(
+                            bs.geometry::geography,
+                            poi.location::geography,
+                            1000
+                        )
+                        GROUP BY bs.id, bs.length_m
                     )
+                    UPDATE gis_data_roadsegment rs
+                    SET poi_density = sd.density
+                    FROM segment_densities sd
+                    WHERE rs.id = sd.id
+                """)
+
+                batch_updated = cursor.rowcount
+                total_updated += batch_updated
+
+                batch_elapsed = time.time() - batch_start
+                current_progress = min(offset + batch_size, total_to_process)
+                percent_complete = (current_progress / total_to_process) * 100
+
+                # Calculate ETA (estimated time arrival)
+                elapsed_total = time.time() - start_time
+                if percent_complete > 0:
+                    estimated_total_time = (elapsed_total / percent_complete) * 100
+                    eta_seconds = estimated_total_time - elapsed_total
+                    eta_minutes = eta_seconds / 60
+                else:
+                    eta_minutes = 0
+
+                logger.info(
+                    f"POI density: Processed {current_progress:,}/{total_to_process:,} segments "
+                    f"({percent_complete:.1f}%) "
+                    f"- Batch: {batch_elapsed:.1f}s "
+                    f"- ETA: {eta_minutes:.1f} min"
                 )
-                WHERE rs.geometry IS NOT NULL
-            """
-            )
-            return cursor.rowcount
+
+                # Small pause to prevent DB overload
+                if offset + batch_size < total_to_process and batch_elapsed < 10:
+                    time.sleep(0.2)
+
+            total_elapsed = time.time() - start_time
+            logger.info(f"POI density calculation complete: {total_updated:,} segments updated in {total_elapsed:.1f}s")
+            return total_updated
 
     @staticmethod
     def _update_weighted_poi_density():
-        """Calculate and update weighted POI density (considering importance)."""
+        """Calculate and update weighted POI density - BATCH VERSION."""
+        batch_size = 5000  # Process 5000 segments at a time
+        total_updated = 0
+
         with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                UPDATE gis_data_roadsegment rs
-                SET weighted_poi_density = (
-                    SELECT COALESCE(SUM(poi.importance_score), 0)
-                    / GREATEST(rs.length_m, 1000)
-                    FROM gis_data_pointofinterest poi
-                    WHERE ST_DWithin(
-                        rs.geometry::geography,
-                        poi.location::geography,
-                        1000
+            # Get total segments to process
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM gis_data_roadsegment 
+                WHERE geometry IS NOT NULL 
+                AND (weighted_poi_density = 0 OR weighted_poi_density IS NULL)
+            """)
+            total_to_process = cursor.fetchone()[0]
+
+            if total_to_process == 0:
+                logger.info("No segments need weighted POI density calculation")
+                return 0
+
+            logger.info(f"Starting weighted POI density calculation for {total_to_process:,} segments")
+
+            # Get approximate segments per minute for ETA
+            start_time = time.time()
+
+            # Process in batches
+            for offset in range(0, total_to_process, batch_size):
+                batch_start = time.time()
+
+                cursor.execute(f"""
+                    -- Process one batch of segments
+                    WITH batch_segments AS (
+                        SELECT id, geometry, length_m
+                        FROM gis_data_roadsegment
+                        WHERE geometry IS NOT NULL
+                        AND (weighted_poi_density = 0 OR weighted_poi_density IS NULL)
+                        ORDER BY id
+                        LIMIT {batch_size} OFFSET {offset}
+                    ),
+                    segment_weighted_densities AS (
+                        SELECT 
+                            bs.id,
+                            COALESCE(SUM(poi.importance_score), 0) / 
+                            GREATEST(bs.length_m, 1000.0) as weighted_density
+                        FROM batch_segments bs
+                        LEFT JOIN gis_data_pointofinterest poi ON ST_DWithin(
+                            bs.geometry::geography,
+                            poi.location::geography,
+                            1000
+                        )
+                        GROUP BY bs.id, bs.length_m
                     )
+                    UPDATE gis_data_roadsegment rs
+                    SET weighted_poi_density = swd.weighted_density
+                    FROM segment_weighted_densities swd
+                    WHERE rs.id = swd.id
+                """)
+
+                batch_updated = cursor.rowcount
+                total_updated += batch_updated
+
+                batch_elapsed = time.time() - batch_start
+                current_progress = min(offset + batch_size, total_to_process)
+                percent_complete = (current_progress / total_to_process) * 100
+
+                # Calculate ETA
+                elapsed_total = time.time() - start_time
+                if percent_complete > 0:
+                    estimated_total_time = (elapsed_total / percent_complete) * 100
+                    eta_seconds = estimated_total_time - elapsed_total
+                    eta_minutes = eta_seconds / 60
+                else:
+                    eta_minutes = 0
+
+                logger.info(
+                    f"Weighted POI density: Processed {current_progress:,}/{total_to_process:,} segments "
+                    f"({percent_complete:.1f}%) "
+                    f"- Batch: {batch_elapsed:.1f}s "
+                    f"- ETA: {eta_minutes:.1f} min"
                 )
-                WHERE rs.geometry IS NOT NULL
-            """
-            )
-            return cursor.rowcount
+
+                # Small pause to prevent DB overload
+                if offset + batch_size < total_to_process and batch_elapsed < 10:
+                    time.sleep(0.2)
+
+            total_elapsed = time.time() - start_time
+            logger.info(
+                f"Weighted POI density calculation complete: {total_updated:,} segments updated in {total_elapsed:.1f}s")
+            return total_updated
 
     @staticmethod
     def _assign_base_scenic_ratings():
@@ -164,22 +308,80 @@ class MetricsCalculator:
                 WHERE scenic_rating = 0 OR scenic_rating IS NULL
             """
             )
-            return cursor.rowcount
+            updated = cursor.rowcount
+            logger.info(f"Base scenic ratings assigned to {updated:,} segments")
+            return updated
 
     @staticmethod
     def _enhance_scenic_with_poi_density():
-        """Enhance scenic ratings with POI density bonus."""
+        """Enhance scenic ratings with POI density bonus - BATCH VERSION."""
+        batch_size = 10000
+        total_updated = 0
+
         with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                UPDATE gis_data_roadsegment
-                SET scenic_rating = LEAST(10.0,
-                    scenic_rating + (poi_density * 0.5)
+
+            # Get segments with POI density
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM gis_data_roadsegment 
+                WHERE poi_density > 0 
+                AND scenic_rating > 0
+            """)
+            total_to_process = cursor.fetchone()[0]
+
+            if total_to_process == 0:
+                logger.info("No segments need scenic rating enhancement")
+                return 0
+
+            logger.info(f"Enhancing scenic ratings for {total_to_process:,} segments with POI density")
+
+            # Get approximate segments per minute for ETA
+            start_time = time.time()
+
+            # Process in batches
+            for offset in range(0, total_to_process, batch_size):
+                batch_start = time.time()
+
+                cursor.execute(f"""
+                    UPDATE gis_data_roadsegment
+                    SET scenic_rating = LEAST(10.0,
+                        scenic_rating + (poi_density * 0.5)
+                    )
+                    WHERE id IN (
+                        SELECT id 
+                        FROM gis_data_roadsegment 
+                        WHERE poi_density > 0 
+                        AND scenic_rating > 0
+                        ORDER BY id
+                        LIMIT {batch_size} OFFSET {offset}
+                    )
+                """)
+
+                batch_updated = cursor.rowcount
+                total_updated += batch_updated
+
+                batch_elapsed = time.time() - batch_start
+                current_progress = min(offset + batch_size, total_to_process)
+                percent_complete = (current_progress / total_to_process) * 100
+                elapsed_total = time.time() - start_time
+                if percent_complete > 0:
+                    estimated_total_time = (elapsed_total / percent_complete) * 100
+                    eta_seconds = estimated_total_time - elapsed_total
+                    eta_minutes = eta_seconds / 60
+                else:
+                    eta_minutes = 0
+
+                logger.info(
+                    f"Scenic enhancement: Processed {current_progress:,}/{total_to_process:,} segments "
+                    f"({percent_complete:.1f}%) "
+                    f"- Batch: {batch_elapsed:.1f}s "
+                    f"- ETA: {eta_minutes:.1f} min"
                 )
-                WHERE poi_density > 0
-            """
-            )
-            return cursor.rowcount
+
+            total_elapsed = time.time() - start_time
+            logger.info(
+                f"Scenic rating enhancement complete: {total_updated:,} segments updated in {total_elapsed:.1f}s")
+            return total_updated
 
     @staticmethod
     def _get_scenic_statistics():
@@ -204,22 +406,46 @@ class MetricsCalculator:
         """Calculate scenic quality scores for road segments."""
         results = {}
 
+        overall_start_time = time.time()
+
+        logger.info("Step 1/4: Calculating POI density...")
+        start_time = time.time()
         results["poi_density_calculated"] = MetricsCalculator._update_poi_density()
+        step_elapsed = time.time() - start_time
+        logger.info(f"Step 1 completed in {step_elapsed:.1f}s")
+
+        logger.info("Step 2/4: Calculating weighted POI density...")
+        start_time = time.time()
         results[
             "weighted_poi_density_calculated"
         ] = MetricsCalculator._update_weighted_poi_density()
+        step_elapsed = time.time() - start_time
+        logger.info(f"Step 2 completed in {step_elapsed:.1f}s")
+
+        logger.info("Step 3/4: Assigning base scenic ratings...")
+        start_time = time.time()
         results[
             "scenic_ratings_assigned"
         ] = MetricsCalculator._assign_base_scenic_ratings()
+        step_elapsed = time.time() - start_time
+        logger.info(f"Step 3 completed in {step_elapsed:.1f}s")
+
+        logger.info("Step 4/4: Enhancing scenic ratings with POI density...")
+        start_time = time.time()
         results[
             "scenic_ratings_enhanced"
         ] = MetricsCalculator._enhance_scenic_with_poi_density()
+        step_elapsed = time.time() - start_time
+        logger.info(f"Step 4 completed in {step_elapsed:.1f}s")
 
         stats = MetricsCalculator._get_scenic_statistics()
         results["average_scenic_rating"] = stats[0] or 0
         results["average_poi_density"] = stats[1] or 0
         results["highly_scenic_segments"] = stats[2] or 0
         results["low_scenic_segments"] = stats[3] or 0
+
+        total_elapsed = time.time() - overall_start_time
+        logger.info(f"All scenic score calculations completed in {total_elapsed:.1f}s ({total_elapsed / 60:.1f} min)")
 
         return results
 

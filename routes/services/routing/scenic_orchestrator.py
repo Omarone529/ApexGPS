@@ -78,24 +78,23 @@ class ScenicRouteOrchestrator:
 
     @staticmethod
     def find_best_scenic_route_with_constraint(
-        start_point: Point,
-        end_point: Point,
-        preference: str = "balanced",
-        vertex_threshold: float = 0.01,
+            start_point: Point,
+            end_point: Point,
+            preference: str = "balanced",
+            vertex_threshold: float = 0.01,
     ) -> dict:
         """Find best scenic route that respects time constraint."""
         start_time = time.time()
 
-        # Calculate fastest route for baseline
         logger.info("Calculating fastest route for time reference...")
         fast_service = FastRoutingService()
         fastest_result = fast_service.calculate_route(
             start_point=start_point,
             end_point=end_point,
-            vertex_threshold=vertex_threshold,
         )
 
         if not fastest_result:
+            logger.error("Fastest route calculation failed even with default threshold")
             return {
                 "success": False,
                 "error": "Cannot calculate fastest route",
@@ -106,7 +105,7 @@ class ScenicRouteOrchestrator:
         fastest_minutes = fastest_result.get("total_time_minutes", 0)
         logger.info(f"Fastest route time: {fastest_minutes:.1f} min")
 
-        # Calculate scenic route
+        # Calculate scenic route with provided threshold
         logger.info(f"Calculating scenic route with '{preference}' preference...")
         scenic_service = ScenicRoutingService(preference=preference)
 
@@ -114,7 +113,7 @@ class ScenicRouteOrchestrator:
             start_point=start_point,
             end_point=end_point,
             reference_fastest_time=fastest_minutes,
-            vertex_threshold=vertex_threshold,
+            vertex_threshold=vertex_threshold,  # Use provided threshold for POI discovery
         )
 
         processing_time_ms = (time.time() - start_time) * 1000
@@ -193,12 +192,12 @@ class ScenicRouteOrchestrator:
 
     @staticmethod
     def calculate_from_coordinates(
-        start_lat: float,
-        start_lon: float,
-        end_lat: float,
-        end_lon: float,
-        preference: str = "balanced",
-        **kwargs,
+            start_lat: float,
+            start_lon: float,
+            end_lat: float,
+            end_lon: float,
+            preference: str = "balanced",
+            **kwargs,
     ) -> dict:
         """Calculate scenic route from coordinates."""
         # Validate coordinates

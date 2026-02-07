@@ -46,45 +46,85 @@ def _find_nearest_vertex(point: Point, distance_threshold: float = 0.01) -> int 
     """Find nearest routing vertex to a geographic point."""
     point_wkt = f"SRID=4326;POINT({point.x} {point.y})"
 
-    with connection.cursor() as cursor:
-        cursor.execute(
-            """
-            SELECT v.id, COUNT(r.id) as connection_count
-            FROM gis_data_roadsegment_vertices_pgr v
-            LEFT JOIN gis_data_roadsegment r ON
-                (r.source = v.id OR r.target = v.id)
-                AND r.is_active = true
-                AND r.highway NOT IN ('footway', 'path', 'cycleway', 'steps', 'service')
-            WHERE ST_DWithin(v.the_geom, ST_GeomFromEWKT(%s), %s)
-            GROUP BY v.id
-            HAVING COUNT(r.id) >= 2  -- Almeno 2 collegamenti (non terminale)
-            ORDER BY ST_Distance(v.the_geom, ST_GeomFromEWKT(%s))
-            LIMIT 1
-            """,
-            [point_wkt, distance_threshold, point_wkt],
-        )
+    queries = [
 
-        result = cursor.fetchone()
-        if result:
-            return result[0]
+        #Find vertices with >= 3 connections on drivable roads (most reliable)
+        """
+        SELECT v.id, COUNT(r.id) as connections
+        FROM gis_data_roadsegment_vertices_pgr v
+        LEFT JOIN gis_data_roadsegment r ON 
+            (r.source = v.id OR r.target = v.id)
+            AND r.is_active = true
+            AND r.highway NOT IN ('footway', 'path', 'cycleway', 'steps')
+        WHERE ST_DWithin(v.the_geom, ST_GeomFromEWKT(%s), %s)
+        GROUP BY v.id
+        HAVING COUNT(r.id) >= 3
+        ORDER BY COUNT(r.id) DESC, ST_Distance(v.the_geom, ST_GeomFromEWKT(%s))
+        LIMIT 1
+        """,
 
-        cursor.execute(
-            """
-            SELECT v.id
-            FROM gis_data_roadsegment_vertices_pgr v
-            LEFT JOIN gis_data_roadsegment r ON
-                (r.source = v.id OR r.target = v.id)
-                AND r.is_active = true
-            WHERE ST_DWithin(v.the_geom, ST_GeomFromEWKT(%s), %s)
-            GROUP BY v.id
-            ORDER BY ST_Distance(v.the_geom, ST_GeomFromEWKT(%s))
-            LIMIT 1
-            """,
-            [point_wkt, distance_threshold, point_wkt],
-        )
+        # Find vertices with >= 2 connections on drivable roads
+        """
+        SELECT v.id, COUNT(r.id) as connections
+        FROM gis_data_roadsegment_vertices_pgr v
+        LEFT JOIN gis_data_roadsegment r ON 
+            (r.source = v.id OR r.target = v.id)
+            AND r.is_active = true
+            AND r.highway NOT IN ('footway', 'path', 'cycleway', 'steps')
+        WHERE ST_DWithin(v.the_geom, ST_GeomFromEWKT(%s), %s)
+        GROUP BY v.id
+        HAVING COUNT(r.id) >= 2
+        ORDER BY COUNT(r.id) DESC, ST_Distance(v.the_geom, ST_GeomFromEWKT(%s))
+        LIMIT 1
+        """,
 
-        result = cursor.fetchone()
-        return result[0] if result else None
+        # Find any vertex with at least 1 connection
+        """
+        SELECT v.id, COUNT(r.id) as connections
+        FROM gis_data_roadsegment_vertices_pgr v
+        LEFT JOIN gis_data_roadsegment r ON 
+            (r.source = v.id OR r.target = v.id)
+            AND r.is_active = true
+        WHERE ST_DWithin(v.the_geom, ST_GeomFromEWKT(%s), %s)
+        GROUP BY v.id
+        HAVING COUNT(r.id) >= 1
+        ORDER BY COUNT(r.id) DESC, ST_Distance(v.the_geom, ST_GeomFromEWKT(%s))
+        LIMIT 1
+        """,
+
+        # find ANY vertex
+        """
+        SELECT v.id
+        FROM gis_data_roadsegment_vertices_pgr v
+        WHERE ST_DWithin(v.the_geom, ST_GeomFromEWKT(%s), %s)
+        ORDER BY ST_Distance(v.the_geom, ST_GeomFromEWKT(%s))
+        LIMIT 1
+        """
+    ]
+
+    for i, query in enumerate(queries):
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(query, [point_wkt, distance_threshold, point_wkt])
+                result = cursor.fetchone()
+
+                if result:
+                    vertex_id = result[0]
+                    connections = result[1] if len(result) > 1 else "unknown"
+                    logger.debug(f"Found vertex {vertex_id} with {connections} connections (query {i + 1})")
+                    return vertex_id
+
+        except Exception as e:
+            logger.warning(f"Query {i + 1} failed: {str(e)}")
+            continue
+
+    # If nothing found with current threshold, try with slightly larger one
+    if distance_threshold < 0.02:  # Don't go too large
+        logger.debug(f"No vertex found with threshold {distance_threshold}, trying 0.02")
+        return _find_nearest_vertex(point, distance_threshold=0.02)
+
+    logger.warning(f"No vertices found within 0.02 degrees of point {point}")
+    return None
 
 
 def _get_road_segment_by_id(segment_id: int) -> dict | None:
