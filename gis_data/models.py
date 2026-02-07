@@ -408,7 +408,7 @@ class RoadSegment(models.Model):
     )
 
     # pgRouting graph structure
-    source = models.IntegerField(
+    source = models.BigIntegerField(
         blank=True,
         null=True,
         db_index=True,
@@ -416,12 +416,48 @@ class RoadSegment(models.Model):
         help_text="ID del nodo di partenza nel grafo di routing",
     )
 
-    target = models.IntegerField(
+    target = models.BigIntegerField(
         blank=True,
         null=True,
         db_index=True,
         verbose_name="Nodo di Arrivo",
         help_text="ID del nodo di arrivo nel grafo di routing",
+    )
+
+    x1 = models.FloatField(
+        blank=True,
+        null=True,
+        verbose_name="X Coordinate Start",
+        help_text="Start X coordinate for A* algorithm optimization",
+    )
+
+    y1 = models.FloatField(
+        blank=True,
+        null=True,
+        verbose_name="Y Coordinate Start",
+        help_text="Start Y coordinate for A* algorithm optimization",
+    )
+
+    x2 = models.FloatField(
+        blank=True,
+        null=True,
+        verbose_name="X Coordinate End",
+        help_text="End X coordinate for A* algorithm optimization",
+    )
+
+    y2 = models.FloatField(
+        blank=True,
+        null=True,
+        verbose_name="Y Coordinate End",
+        help_text="End Y coordinate for A* algorithm optimization",
+    )
+
+    # ADD NEW FIELD for noded network
+    old_id = models.BigIntegerField(
+        blank=True,
+        null=True,
+        verbose_name="Original Segment ID",
+        help_text="Link to original road segment before noded network creation",
     )
 
     # Pre-calculated routing costs
@@ -503,6 +539,14 @@ class RoadSegment(models.Model):
         if self.geometry and self.geometry.length > 0:
             # Approximate conversion: 1 degree ≈ 111.32 km at equator
             self.length_m = self.geometry.length * 111319.9
+
+            coords = list(self.geometry.coords)
+            if coords:
+                # Start coordinates (longitude, latitude)
+                self.x1, self.y1 = coords[0]
+                # End coordinates (longitude, latitude)
+                self.x2, self.y2 = coords[-1]
+
         super().save(*args, **kwargs)
 
     def calculate_scenic_cost(self, alpha=1.0, beta=0.5):
@@ -558,3 +602,100 @@ class RoadSegment(models.Model):
             default_speed_mps = 50 / 3.6
             time_seconds = self.length_m / default_speed_mps
             return time_seconds / 60
+
+
+class RoadSegmentNoded(models.Model):
+    """
+    Noded road network for pgRouting v4.0.
+    This model will be created by pgr_nodeNetwork function.
+    """
+    gid = models.AutoField(primary_key=True)
+    old_id = models.BigIntegerField(
+        blank=True,
+        null=True,
+        verbose_name="Original Segment ID",
+        db_index=True,
+    )
+
+    # Copy fields from RoadSegment
+    name = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        verbose_name="Nome della Strada",
+    )
+
+    geometry = models.LineStringField(
+        srid=4326,
+        verbose_name="Tracciato",
+    )
+
+    length_m = models.FloatField(
+        default=0.0,
+        verbose_name="Lunghezza (metri)",
+    )
+
+    cost_length = models.FloatField(
+        default=0.0,
+        verbose_name="Costo per Lunghezza",
+    )
+
+    cost_time = models.FloatField(
+        default=0.0,
+        verbose_name="Costo per Tempo",
+    )
+
+    cost_scenic = models.FloatField(
+        default=0.0,
+        verbose_name="Costo Panoramico",
+    )
+
+    cost_balanced = models.FloatField(
+        default=0.0,
+        verbose_name="Costo Bilanciato",
+    )
+
+    # pgRouting v4.0 topology
+    source = models.BigIntegerField(
+        null = True,
+        blank = True,
+        db_index=True,
+        verbose_name="Nodo di Partenza",
+    )
+
+    target = models.BigIntegerField(
+        null = True,
+        blank = True,
+        db_index=True,
+        verbose_name="Nodo di Arrivo",
+    )
+
+    # A* coordinates
+    x1 = models.FloatField(blank=True, null=True)
+    y1 = models.FloatField(blank=True, null=True)
+    x2 = models.FloatField(blank=True, null=True)
+    y2 = models.FloatField(blank=True, null=True)
+
+    def save(self, *args, **kwargs):
+        # Auto-calculate x1,y1,x2,y2 if geometry exists
+        if self.geometry and self.geometry.length > 0:
+            coords = list(self.geometry.coords)
+            if coords:
+                self.x1, self.y1 = coords[0]  # Start point
+                self.x2, self.y2 = coords[-1]  # End point
+        super().save(*args, **kwargs)
+
+
+    class Meta:
+        verbose_name = "Segmento Stradale (Noded)"
+        verbose_name_plural = "Segmenti Stradali (Noded)"
+        indexes = [
+            models.Index(fields=['source', 'target']),
+            models.Index(fields=['source']),
+            models.Index(fields=['target']),
+            models.Index(fields=['old_id']),
+        ]
+        db_table = 'road_segment_noded'
+
+    def __str__(self):
+        return f"Noded Segment {self.gid} (orig: {self.old_id})"
