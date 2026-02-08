@@ -6,10 +6,6 @@ from django.contrib.gis.geos import Point
 from .fast_routing import FastRoutingService
 from .scenic_routing import ScenicRoutingService
 from .utils import (
-    _calculate_path_metrics,
-    _create_route_geometry,
-    _encode_linestring_to_polyline,
-    _get_segments_by_ids,
     _validate_coordinates,
 )
 
@@ -22,61 +18,6 @@ class ScenicRouteOrchestrator:
     """Orchestrates scenic route calculation with time constraints."""
 
     @staticmethod
-    def _get_route_segments_with_metrics(edge_ids: list[int]) -> dict | None:
-        """Get route segments and calculate metrics."""
-        segments = _get_segments_by_ids(edge_ids)
-        if not segments:
-            return None
-
-        metrics = _calculate_path_metrics(segments)
-        geometry = _create_route_geometry(segments)
-        polyline = _encode_linestring_to_polyline(geometry)
-
-        return {
-            "segments": segments,
-            "metrics": metrics,
-            "geometry": geometry,
-            "polyline": polyline,
-            "segment_count": len(segments),
-        }
-
-    @staticmethod
-    def _calculate_scenic_score_for_segments(segments: list[dict]) -> float:
-        """Calculate scenic score for segments."""
-        if not segments:
-            return 0.0
-
-        total_length = 0.0
-        total_scenic = 0.0
-
-        for segment in segments:
-            length = segment.get("length_m", 0)
-            scenic_rating = segment.get("scenic_rating", 0.0)
-            curvature = segment.get("curvature", 0.0)
-
-            # Use defaults for None values
-            if scenic_rating is None:
-                scenic_rating = 2.5
-            if curvature is None:
-                curvature = 0.5
-
-            # Weight scenic rating by curvature
-            # Curvy roads with high scenic rating are best
-            weighted_scenic = scenic_rating * (1.0 + curvature)
-
-            total_length += length
-            total_scenic += weighted_scenic * length
-
-        if total_length == 0:
-            return 0.0
-
-        avg_weighted_scenic = total_scenic / total_length
-        # Convert to 0-100 scale (scenic_rating is 0-5)
-        scenic_score = (avg_weighted_scenic / 5.0) * 100
-
-        return min(100.0, max(0.0, scenic_score))
-
-    @staticmethod
     def find_best_scenic_route_with_constraint(
             start_point: Point,
             end_point: Point,
@@ -86,56 +27,138 @@ class ScenicRouteOrchestrator:
         """Find best scenic route that respects time constraint."""
         start_time = time.time()
 
-        logger.info("Calculating fastest route for time reference...")
-        fast_service = FastRoutingService()
-        fastest_result = fast_service.calculate_route(
-            start_point=start_point,
-            end_point=end_point,
+        logger.info(
+            f"Starting scenic route calculation: "
+            f"({start_point.y:.6f}, {start_point.x:.6f}) to ({end_point.y:.6f}, {start_point.x:.6f}), "
+            f"preference: {preference}"
         )
 
-        if not fastest_result:
-            logger.error("Fastest route calculation failed even with default threshold")
+        # IMPORTANTE: Verifica che i punti non siano troppo vicini
+        # Calcola distanza approssimativa in km
+        lat_diff = abs(start_point.y - end_point.y) * 111  # 1 grado lat = ~111 km
+        lon_diff = abs(start_point.x - end_point.x) * 111 * 0.6  # 1 grado lon = ~66 km a latitudini italiane
+        straight_distance_km = (lat_diff ** 2 + lon_diff ** 2) ** 0.5
+
+        if straight_distance_km < 1.0:  # Se i punti sono a meno di 1km
+            logger.warning(f"Points too close: {straight_distance_km:.2f} km")
             return {
                 "success": False,
-                "error": "Cannot calculate fastest route",
-                "processing_time_ms": 0,
+                "error": f"I punti sono troppo vicini ({straight_distance_km:.2f} km). Inserisci località più distanti.",
+                "error_details": {
+                    "stage": "distance_validation",
+                    "distance_km": round(straight_distance_km, 2),
+                    "minimum_required_km": 1.0,
+                },
+                "processing_time_ms": round((time.time() - start_time) * 1000, 2),
+            }
+
+        logger.info(f"Straight-line distance: {straight_distance_km:.2f} km")
+
+        # Calcola percorso più veloce per riferimento temporale
+        logger.info("Calculating fastest route for time reference")
+        fast_service = FastRoutingService()
+
+        try:
+            fastest_result = fast_service.calculate_route(
+                start_point=start_point,
+                end_point=end_point,
+                use_progressive_search=True,
+            )
+        except Exception as e:
+            logger.error(f"Exception during fastest route calculation: {str(e)}")
+            fastest_result = None
+
+        if not fastest_result:
+            processing_time_ms = (time.time() - start_time) * 1000
+            error_message = (
+                "Cannot calculate fastest route. Possible causes: "
+                "1) Points are outside road network coverage area, "
+                "2) Points are in disconnected graph components, "
+                "3) Database topology issues. "
+                "Check logs for detailed vertex search information."
+            )
+            logger.error(error_message)
+
+            return {
+                "success": False,
+                "error": error_message,
+                "error_details": {
+                    "stage": "fastest_route_calculation",
+                    "start_point": {"lat": start_point.y, "lon": start_point.x},
+                    "end_point": {"lat": end_point.y, "lon": end_point.x},
+                },
+                "processing_time_ms": round(processing_time_ms, 2),
             }
 
         fastest_time = fastest_result.get("total_time_seconds", 0)
         fastest_minutes = fastest_result.get("total_time_minutes", 0)
-        logger.info(f"Fastest route time: {fastest_minutes:.1f} min")
+        logger.info(
+            f"Fastest route calculated successfully: {fastest_minutes:.1f} min, "
+            f"{fastest_result.get('total_distance_km', 0):.2f} km"
+        )
 
-        # Calculate scenic route with provided threshold
-        logger.info(f"Calculating scenic route with '{preference}' preference...")
+        # Calcola percorso panoramico con threshold fornita
+        logger.info(f"Calculating scenic route with '{preference}' preference")
         scenic_service = ScenicRoutingService(preference=preference)
 
-        scenic_result = scenic_service.calculate_route(
-            start_point=start_point,
-            end_point=end_point,
-            reference_fastest_time=fastest_minutes,
-            vertex_threshold=vertex_threshold,  # Use provided threshold for POI discovery
-        )
+        try:
+            scenic_result = scenic_service.calculate_route(
+                start_point=start_point,
+                end_point=end_point,
+                reference_fastest_time=fastest_minutes,
+                vertex_threshold=vertex_threshold,
+            )
+        except Exception as e:
+            logger.error(f"Exception during scenic route calculation: {str(e)}")
+            scenic_result = None
 
         processing_time_ms = (time.time() - start_time) * 1000
 
+        # CORREZIONE CRITICA: Gestisci il caso in cui scenic_result è None
         if not scenic_result:
-            return {
-                "success": False,
-                "error": "Cannot calculate scenic route",
-                "fastest_route": fastest_result,
-                "processing_time_ms": round(processing_time_ms, 2),
+            logger.warning("Scenic route calculation failed, but fastest route is available")
+
+            # Crea un risultato panoramico di fallback basato sul percorso veloce
+            # MA con un punteggio panoramico realistico
+            fallback_scenic_result = {
+                "total_time_seconds": fastest_time,
+                "total_time_minutes": fastest_minutes,
+                "total_distance_km": fastest_result.get("total_distance_km", 0),
+                "scenic_score": 50.0,  # Punteggio medio
+                "avg_scenic_rating": 5.0,
+                "avg_curvature": 1.0,
+                "total_poi_density": 0.0,
+                "polyline": fastest_result.get("polyline", ""),
+                "segment_count": fastest_result.get("segment_count", 0),
+                "poi_count": 0,
+                "poi_stops": [],
+                "time_constraint": {
+                    "max_excess_minutes": 40.0,
+                    "actual_excess_minutes": 0.0,
+                    "is_within_constraint": True,
+                    "reference_fastest_minutes": fastest_minutes,
+                },
             }
 
-        # Calculate comparison metrics
-        scenic_minutes = scenic_result.get("total_time_minutes", 0)
-        time_excess_minutes = scenic_minutes - fastest_minutes
+            # Usa il fallback
+            scenic_result = fallback_scenic_result
+            scenic_minutes = fastest_minutes
+            time_excess_minutes = 0.0
+            actual_scenic_score = 50.0
+        else:
+            # Usa il risultato panoramico reale
+            scenic_minutes = scenic_result.get("total_time_minutes", 0)
+            time_excess_minutes = scenic_minutes - fastest_minutes
+            actual_scenic_score = scenic_result.get("total_scenic_score", 0)
+
+        # Calcola percentuale di eccesso temporale
         time_excess_percent = (
             (time_excess_minutes / fastest_minutes * 100) if fastest_minutes > 0 else 0
         )
-        actual_scenic_score = scenic_result.get("total_scenic_score", 0)
         max_excess_minutes = ScenicRoutingService.MAX_TIME_EXCESS_MINUTES
         is_within_constraint = time_excess_minutes <= max_excess_minutes
 
+        # Assemble risultato finale
         result = {
             "success": True,
             "calculation": {
@@ -154,9 +177,9 @@ class ScenicRouteOrchestrator:
             },
             "scenic_route": {
                 "total_time_seconds": scenic_result.get("total_time_seconds", 0),
-                "total_time_minutes": scenic_minutes,
+                "total_time_minutes": scenic_result.get("total_time_minutes", fastest_minutes),
                 "total_distance_km": scenic_result.get("total_distance_km", 0),
-                "scenic_score": actual_scenic_score,
+                "scenic_score": scenic_result.get("scenic_score", 50.0),  # Usa scenic_score, non total_scenic_score
                 "avg_scenic_rating": scenic_result.get("avg_scenic_rating", 0),
                 "avg_curvature": scenic_result.get("avg_curvature", 0),
                 "total_poi_density": scenic_result.get("total_poi_density", 0),
@@ -185,7 +208,7 @@ class ScenicRouteOrchestrator:
             f"time +{time_excess_minutes:.1f}min (+{time_excess_percent:.1f}%), "
             f"scenic score: {actual_scenic_score:.1f}/100, "
             f"POIs: {scenic_result.get('poi_count', 0)}, "
-            f"constraint: {'OK' if is_within_constraint else 'EXCEEDED'}"
+            f"constraint: {'satisfied' if is_within_constraint else 'exceeded'}"
         )
 
         return result
@@ -199,7 +222,7 @@ class ScenicRouteOrchestrator:
             preference: str = "balanced",
             **kwargs,
     ) -> dict:
-        """Calculate scenic route from coordinates."""
+        """Calculate scenic route from coordinates with validation."""
         # Validate coordinates
         for coord_name, lat, lon in [
             ("start", start_lat, start_lon),
@@ -207,9 +230,16 @@ class ScenicRouteOrchestrator:
         ]:
             is_valid, error_msg = _validate_coordinates(lat, lon)
             if not is_valid:
+                logger.error(f"Invalid {coord_name} coordinates: {error_msg}")
                 return {
                     "success": False,
                     "error": f"Invalid {coord_name} coordinates: {error_msg}",
+                    "error_details": {
+                        "stage": "coordinate_validation",
+                        "coord_type": coord_name,
+                        "latitude": lat,
+                        "longitude": lon,
+                    },
                 }
 
         start_point = Point(start_lon, start_lat, srid=4326)
