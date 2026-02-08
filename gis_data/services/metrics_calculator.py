@@ -1,7 +1,6 @@
-import logging
-import time
-
 from django.db import connection
+import time
+import logging
 
 logger = logging.getLogger(__name__)
 
@@ -111,9 +110,11 @@ class MetricsCalculator:
 
         return results
 
+    #TODO
     @staticmethod
     def _update_poi_density():
         """Calculate and update POI density within 1km buffer."""
+
         # Process 5000 segments at a time
         batch_size = 5000
         total_updated = 0
@@ -211,6 +212,7 @@ class MetricsCalculator:
             )
             return total_updated
 
+    #TODO
     @staticmethod
     def _update_weighted_poi_density():
         """Calculate and update weighted POI density - BATCH VERSION."""
@@ -311,6 +313,7 @@ class MetricsCalculator:
             )
             return total_updated
 
+    #TODO
     @staticmethod
     def _assign_base_scenic_ratings():
         """Assign initial scenic ratings based on road classification."""
@@ -332,6 +335,7 @@ class MetricsCalculator:
             logger.info(f"Base scenic ratings assigned to {updated:,} segments")
             return updated
 
+    #TODO
     @staticmethod
     def _enhance_scenic_with_poi_density():
         """Enhance scenic ratings with POI density bonus."""
@@ -412,6 +416,7 @@ class MetricsCalculator:
             )
             return total_updated
 
+    #TODO
     @staticmethod
     def _get_scenic_statistics():
         """Get statistics about scenic ratings and POI density."""
@@ -431,53 +436,158 @@ class MetricsCalculator:
             return cursor.fetchone()
 
     @staticmethod
-    def calculate_scenic_scores():
-        """Calculate scenic quality scores for road segments."""
-        results = {}
+    def calculate_scenic_scores(batch_size=10000):
+        """
+        Calculate and update scenic scores for road segments in batched database operations.
 
+        This method processes road segments in configurable batches to compute scenic ratings
+        based on surrounding Points of Interest (POIs) density and road classification.
+        It performs database updates with batch-optimized queries to improve performance
+        and memory efficiency when processing large datasets.
+
+        The scenic score calculation includes:
+        1. Base rating from road type classification (highway category)
+        2. Density adjustment based on POI count per kilometer
+        3. Weighted POI density using importance scores
+
+        """
+        results = {}
         overall_start_time = time.time()
 
-        logger.info("Step 1/4: Calculating POI density...")
-        start_time = time.time()
-        results["poi_density_calculated"] = MetricsCalculator._update_poi_density()
-        step_elapsed = time.time() - start_time
-        logger.info(f"Step 1 completed in {step_elapsed:.1f}s")
+        logger.info(f"Starting batch-optimized scenic score calculation (batch size: {batch_size})...")
 
-        logger.info("Step 2/4: Calculating weighted POI density...")
-        start_time = time.time()
-        results[
-            "weighted_poi_density_calculated"
-        ] = MetricsCalculator._update_weighted_poi_density()
-        step_elapsed = time.time() - start_time
-        logger.info(f"Step 2 completed in {step_elapsed:.1f}s")
+        total_updated = 0
 
-        logger.info("Step 3/4: Assigning base scenic ratings...")
-        start_time = time.time()
-        results[
-            "scenic_ratings_assigned"
-        ] = MetricsCalculator._assign_base_scenic_ratings()
-        step_elapsed = time.time() - start_time
-        logger.info(f"Step 3 completed in {step_elapsed:.1f}s")
+        with connection.cursor() as cursor:
+            # Step 1: Get total segments to process
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM gis_data_roadsegment 
+                WHERE geometry IS NOT NULL
+            """)
+            total_segments = cursor.fetchone()[0]
 
-        logger.info("Step 4/4: Enhancing scenic ratings with POI density...")
-        start_time = time.time()
-        results[
-            "scenic_ratings_enhanced"
-        ] = MetricsCalculator._enhance_scenic_with_poi_density()
-        step_elapsed = time.time() - start_time
-        logger.info(f"Step 4 completed in {step_elapsed:.1f}s")
+            logger.info(f"Processing {total_segments:,} total segments")
 
-        stats = MetricsCalculator._get_scenic_statistics()
-        results["average_scenic_rating"] = stats[0] or 0
-        results["average_poi_density"] = stats[1] or 0
-        results["highly_scenic_segments"] = stats[2] or 0
-        results["low_scenic_segments"] = stats[3] or 0
+            # Process in batches
+            for offset in range(0, total_segments, batch_size):
+                batch_start = time.time()
+
+                try:
+                    # Process each batch with comprehensive update
+                    cursor.execute(f"""
+                        -- Update POI densities and scenic ratings for one batch
+                        WITH batch_segments AS (
+                            SELECT id, geometry, length_m, highway
+                            FROM gis_data_roadsegment
+                            WHERE geometry IS NOT NULL
+                            ORDER BY id
+                            LIMIT {batch_size} OFFSET {offset}
+                        ),
+                        segment_poi_counts AS (
+                            SELECT 
+                                bs.id,
+                                COUNT(poi.id)::float as poi_count,
+                                COALESCE(SUM(poi.importance_score), 0)::float as weighted_poi_sum
+                            FROM batch_segments bs
+                            LEFT JOIN gis_data_pointofinterest poi ON 
+                                ST_DWithin(
+                                    bs.geometry::geography,
+                                    poi.location::geography,
+                                    1000
+                                )
+                            GROUP BY bs.id
+                        ),
+                        scenic_calculations AS (
+                            SELECT 
+                                bs.id,
+                                spc.poi_count / GREATEST(bs.length_m, 1000.0) as poi_density,
+                                spc.weighted_poi_sum / GREATEST(bs.length_m, 1000.0) as weighted_poi_density,
+                                LEAST(10.0, 
+                                    CASE
+                                        WHEN bs.highway IN ('motorway', 'trunk', 'primary') THEN 3.0
+                                        WHEN bs.highway IN ('secondary', 'tertiary') THEN 5.0
+                                        WHEN bs.highway IN ('unclassified', 'residential') THEN 4.0
+                                        WHEN bs.highway IN ('track', 'path', 'footway') THEN 7.0
+                                        ELSE 5.0
+                                    END + 
+                                    COALESCE((spc.poi_count / GREATEST(bs.length_m, 1000.0)) * 0.5, 0)
+                                ) as scenic_rating
+                            FROM batch_segments bs
+                            LEFT JOIN segment_poi_counts spc ON bs.id = spc.id
+                        )
+                        UPDATE gis_data_roadsegment rs
+                        SET 
+                            poi_density = sc.poi_density,
+                            weighted_poi_density = sc.weighted_poi_density,
+                            scenic_rating = COALESCE(sc.scenic_rating, 
+                                CASE
+                                    WHEN rs.highway IN ('motorway', 'trunk', 'primary') THEN 3.0
+                                    WHEN rs.highway IN ('secondary', 'tertiary') THEN 5.0
+                                    WHEN rs.highway IN ('unclassified', 'residential') THEN 4.0
+                                    WHEN rs.highway IN ('track', 'path', 'footway') THEN 7.0
+                                    ELSE 5.0
+                                END)
+                        FROM scenic_calculations sc
+                        WHERE rs.id = sc.id
+                    """)
+
+                    batch_updated = cursor.rowcount
+                    total_updated += batch_updated
+
+                    batch_elapsed = time.time() - batch_start
+                    current_progress = min(offset + batch_size, total_segments)
+                    percent_complete = (current_progress / total_segments) * 100
+
+                    logger.info(
+                        f"Batch {offset//batch_size + 1}: Processed {batch_updated:,} segments "
+                        f"({percent_complete:.1f}% complete) in {batch_elapsed:.1f}s"
+                    )
+
+                    # Track totals
+                    if "poi_density_calculated" not in results:
+                        results["poi_density_calculated"] = 0
+                    results["poi_density_calculated"] += batch_updated
+
+                    # Small pause to prevent DB overload
+                    if offset + batch_size < total_segments and batch_elapsed < 5:
+                        time.sleep(0.1)
+
+                except Exception as e:
+                    logger.error(f"Error processing batch starting at offset {offset}: {e}")
+                    connection.rollback()
+                    # Optionally continue with next batch
+                    continue
+
+        # Get final statistics
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    ROUND(AVG(scenic_rating)::numeric, 2) as avg_scenic,
+                    ROUND(AVG(poi_density)::numeric, 3) as avg_poi_density,
+                    COUNT(CASE WHEN scenic_rating >= 8 THEN 1 END) as highly_scenic_count,
+                    COUNT(CASE WHEN scenic_rating <= 3 THEN 1 END) as low_scenic_count,
+                    COUNT(*) as total_processed
+                FROM gis_data_roadsegment
+                WHERE scenic_rating > 0 AND geometry IS NOT NULL
+            """)
+
+            stats = cursor.fetchone()
+            results["average_scenic_rating"] = stats[0] or 0
+            results["average_poi_density"] = stats[1] or 0
+            results["highly_scenic_segments"] = stats[2] or 0
+            results["low_scenic_segments"] = stats[3] or 0
+            results["total_processed"] = stats[4] or 0
+            results["scenic_ratings_assigned"] = total_updated
+            results["scenic_ratings_enhanced"] = total_updated
+            results["weighted_poi_density_calculated"] = total_updated
 
         total_elapsed = time.time() - overall_start_time
         logger.info(
             f"All scenic score calculations completed in "
             f"{total_elapsed:.1f}s ({total_elapsed / 60:.1f} min)"
         )
+        logger.info(f"Batch-optimized calculation completed in {total_elapsed:.1f}s")
 
         return results
 
