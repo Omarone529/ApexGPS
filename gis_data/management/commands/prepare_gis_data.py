@@ -302,6 +302,46 @@ class RoutingCostCalculator:
             logger.error(f"Error calculating balanced costs: {e}")
             return 0
 
+    @staticmethod
+    def verify_cost_calculation() -> dict[str, Any]:
+        """Verify that costs have been calculated correctly."""
+        stats = {
+            "total_segments": 0,
+            "segments_with_time_cost": 0,
+            "segments_with_length_cost": 0,
+            "segments_with_scenic_cost": 0,
+            "segments_with_balanced_cost": 0,
+        }
+
+        try:
+            with connection.cursor() as cursor:
+                # Count total segments
+                cursor.execute("SELECT COUNT(*) FROM gis_data_roadsegment")
+                stats["total_segments"] = cursor.fetchone()[0]
+
+                # Count segments with costs
+                cursor.execute("""
+                    SELECT 
+                        COUNT(CASE WHEN cost_time > 0 THEN 1 END) as time_cost,
+                        COUNT(CASE WHEN cost_length > 0 THEN 1 END) as length_cost,
+                        COUNT(CASE WHEN cost_scenic > 0 THEN 1 END) as scenic_cost,
+                        COUNT(CASE WHEN cost_balanced > 0 THEN 1 END) as balanced_cost
+                    FROM gis_data_roadsegment
+                """)
+
+                row = cursor.fetchone()
+                if row:
+                    stats["segments_with_time_cost"] = row[0]
+                    stats["segments_with_length_cost"] = row[1]
+                    stats["segments_with_scenic_cost"] = row[2]
+                    stats["segments_with_balanced_cost"] = row[3]
+
+            logger.info(f"Cost verification: {stats}")
+            return stats
+
+        except Exception as e:
+            logger.error(f"Error verifying costs: {e}")
+            return stats
 
 class MetricsPipeline:
     """Pipeline for calculating all metrics."""
