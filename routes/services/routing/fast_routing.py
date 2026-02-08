@@ -26,19 +26,27 @@ class FastRoutingService(BaseRoutingService):
         return "cost_time"
 
     def calculate_route(
-        self, start_point: Point, end_point: Point, **kwargs
+            self, start_point: Point, end_point: Point, **kwargs
     ) -> dict | None:
         """Calculate fastest route between two points."""
         vertex_threshold = kwargs.get("vertex_threshold", self.DEFAULT_VERTEX_THRESHOLD)
+        use_progressive_search = kwargs.get("use_progressive_search", True)
 
-        # Find nearest vertices on road network
-        start_vertex = _find_nearest_vertex(start_point, vertex_threshold)
-        end_vertex = _find_nearest_vertex(end_point, vertex_threshold)
+        if use_progressive_search:
+            try:
+                from .utils import _find_nearest_vertex_with_progressive_threshold
+                start_vertex, _ = _find_nearest_vertex_with_progressive_threshold(start_point, vertex_threshold)
+                end_vertex, _ = _find_nearest_vertex_with_progressive_threshold(end_point, vertex_threshold)
+            except ImportError:
+                start_vertex = _find_nearest_vertex(start_point, vertex_threshold)
+                end_vertex = _find_nearest_vertex(end_point, vertex_threshold)
+        else:
+            start_vertex = _find_nearest_vertex(start_point, vertex_threshold)
+            end_vertex = _find_nearest_vertex(end_point, vertex_threshold)
 
         if not start_vertex or not end_vertex:
             return None
 
-        # Execute Dijkstra algorithm
         dijkstra_result = _execute_dijkstra_query(
             start_vertex, end_vertex, self.get_cost_column()
         )
@@ -54,10 +62,11 @@ class FastRoutingService(BaseRoutingService):
         if not segments:
             return None
 
-        # Create route geometry
+        # Crea geometria del percorso
         route_geometry = _create_route_geometry(segments)
         metrics = _calculate_path_metrics(segments)
         polyline_encoded = _encode_linestring_to_polyline(route_geometry)
+
         return {
             "route_type": "fastest",
             "preference": "fast",
@@ -72,12 +81,12 @@ class FastRoutingService(BaseRoutingService):
         }
 
     def calculate_fastest_route(
-        self,
-        start_lat: float,
-        start_lon: float,
-        end_lat: float,
-        end_lon: float,
-        **kwargs,
+            self,
+            start_lat: float,
+            start_lon: float,
+            end_lat: float,
+            end_lon: float,
+            **kwargs,
     ) -> dict | None:
         """Calculate route from coordinates."""
         # Validate coordinates

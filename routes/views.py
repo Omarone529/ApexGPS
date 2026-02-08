@@ -151,7 +151,7 @@ class RouteViewSet(viewsets.ModelViewSet):
             return Response(
                 {
                     "error": "Routing services not available. "
-                    "Please ensure database is prepared."
+                             "Please ensure database is prepared."
                 },
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
@@ -171,6 +171,26 @@ class RouteViewSet(viewsets.ModelViewSet):
         vertex_threshold = validated_data.get("vertex_threshold", 0.01)
         start_location_name = validated_data["start_location_name"]
         end_location_name = validated_data["end_location_name"]
+
+        lat_diff = abs(start_lat - end_lat) * 111  # 1 grado lat = ~111 km
+        lon_diff = abs(start_lon - end_lon) * 111 * 0.6
+        straight_distance_km = (lat_diff ** 2 + lon_diff ** 2) ** 0.5
+
+        if straight_distance_km < 1.0:  # Se i punti sono a meno di 1km
+            return Response(
+                {
+                    "error": f"I punti di partenza e arrivo sono troppo vicini ({straight_distance_km:.2f} km).",
+                    "details": {
+                        "distance_km": round(straight_distance_km, 2),
+                        "minimum_required_km": 1.0,
+                        "suggestion": "Inserisci località più distanti per un percorso significativo."
+                    }
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        logger.info(f"Fastest route request: {start_location_name} to {end_location_name}, "
+                    f"distance: {straight_distance_km:.2f} km")
 
         # Initialize services
         fast_service = FastRoutingService()
@@ -207,10 +227,30 @@ class RouteViewSet(viewsets.ModelViewSet):
             if not fastest_route:
                 return Response(
                     {
-                        "error": "No route found between points",
+                        "error": "No route found between points. Possible reasons:\n"
+                                 "1) Points are too close to each other\n"
+                                 "2) Road network not available in the area\n"
+                                 "3) Database connection issues",
                         "validation": validation_result,
+                        "distance_km": round(straight_distance_km, 2),
                     },
                     status=status.HTTP_404_NOT_FOUND,
+                )
+
+            route_distance_km = fastest_route.get("total_distance_km", 0)
+            if route_distance_km < 0.1:  # Meno di 100 metri
+                logger.warning(f"Route distance too small: {route_distance_km} km")
+                return Response(
+                    {
+                        "error": f"Il percorso calcolato è troppo breve ({route_distance_km:.2f} km). "
+                                 "Assicurati che le località siano sufficientemente distanti.",
+                        "details": {
+                            "calculated_distance_km": route_distance_km,
+                            "straight_line_distance_km": round(straight_distance_km, 2),
+                            "suggestion": "Prova con località più distanti o verifica l'input."
+                        }
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
 
             start_data = {
@@ -238,11 +278,18 @@ class RouteViewSet(viewsets.ModelViewSet):
                 processing_time=processing_time,
             )
 
+            response_data["distance_info"] = {
+                "straight_line_km": round(straight_distance_km, 2),
+                "route_km": route_distance_km,
+                "detour_factor": round(route_distance_km / straight_distance_km,
+                                       2) if straight_distance_km > 0 else 1.0,
+            }
+
             # Allow saving only to authenticated non-VISITOR users
             response_data["can_save"] = (
-                request.user.is_authenticated
-                and hasattr(request.user, "role")
-                and request.user.role != "VISITOR"
+                    request.user.is_authenticated
+                    and hasattr(request.user, "role")
+                    and request.user.role != "VISITOR"
             )
 
             # Add data for possible saving
@@ -256,6 +303,9 @@ class RouteViewSet(viewsets.ModelViewSet):
                     "polyline": fastest_route.get("polyline", ""),
                     "total_scenic_score": 0,  # Fast routes have no panoramic score
                 }
+
+            logger.info(f"Fastest route calculated successfully: {route_distance_km:.2f} km, "
+                        f"{fastest_route.get('total_time_minutes', 0):.1f} min")
 
             return Response(response_data, status=status.HTTP_200_OK)
 
@@ -276,6 +326,7 @@ class RouteViewSet(viewsets.ModelViewSet):
                 {
                     "error": f"Error calculating fastest route: {str(e)}",
                     "validation": validation_result,
+                    "distance_km": round(straight_distance_km, 2),
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
@@ -302,7 +353,7 @@ class RouteViewSet(viewsets.ModelViewSet):
             return Response(
                 {
                     "error": "Scenic routing services not available. "
-                    "Please ensure scenic_routing.py exists."
+                             "Please ensure scenic_routing.py exists."
                 },
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
@@ -312,7 +363,7 @@ class RouteViewSet(viewsets.ModelViewSet):
             return Response(
                 {
                     "error": "Routing services not available. "
-                    "Please ensure database is prepared."
+                             "Please ensure database is prepared."
                 },
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
@@ -331,6 +382,23 @@ class RouteViewSet(viewsets.ModelViewSet):
         vertex_threshold = validated_data.get("vertex_threshold", 0.01)
         start_location_name = validated_data["start_location_name"]
         end_location_name = validated_data["end_location_name"]
+
+        lat_diff = abs(start_lat - end_lat) * 111
+        lon_diff = abs(start_lon - end_lon) * 111 * 0.6
+        straight_distance_km = (lat_diff ** 2 + lon_diff ** 2) ** 0.5
+
+        if straight_distance_km < 1.0:
+            return Response(
+                {
+                    "error": f"I punti di partenza e arrivo sono troppo vicini ({straight_distance_km:.2f} km).",
+                    "details": {
+                        "distance_km": round(straight_distance_km, 2),
+                        "minimum_required_km": 1.0,
+                        "suggestion": "Per un percorso panoramico significativo, inserisci località più distanti."
+                    }
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Get scenic preference from request (default to "balanced")
         preference = request.data.get("preference", "balanced")
@@ -372,16 +440,61 @@ class RouteViewSet(viewsets.ModelViewSet):
                 vertex_threshold=vertex_threshold,
             )
 
-            if not scenic_result.get("success"):
+            if not scenic_result:
+                logger.error("ScenicRouteOrchestrator returned None")
+                return Response(
+                    {
+                        "error": "Scenic route calculation returned empty result",
+                        "validation": validation_result,
+                        "distance_km": round(straight_distance_km, 2),
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+            if not scenic_result.get("success", False):
                 error_msg = scenic_result.get(
                     "error", "Unknown error calculating scenic route"
                 )
+
+                if "troppo vicini" in error_msg.lower() or "too close" in error_msg.lower():
+                    error_msg = f"I punti sono troppo vicini per un percorso panoramico ({straight_distance_km:.2f} km). " \
+                                "Prova con località più distanti."
+
                 return Response(
                     {
                         "error": error_msg,
                         "validation": validation_result,
+                        "details": scenic_result.get("error_details", {}),
+                        "distance_km": round(straight_distance_km, 2),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,  # Usa 400 invece di 500 per errori di input
+                )
+
+            scenic_route_data = scenic_result.get("scenic_route", {})
+            if not scenic_route_data:
+                logger.warning("Scenic route data is empty, using fallback")
+                return Response(
+                    {
+                        "error": "Il percorso panoramico non contiene dati validi",
+                        "suggestion": "Prova con un'altra coppia di località o cambia preferenza",
+                        "distance_km": round(straight_distance_km, 2),
                     },
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+            scenic_distance_km = scenic_route_data.get("total_distance_km", 0)
+            if scenic_distance_km < 0.1:
+                logger.warning(f"Scenic route distance too small: {scenic_distance_km} km")
+                return Response(
+                    {
+                        "error": f"Il percorso panoramico calcolato è troppo breve ({scenic_distance_km:.2f} km).",
+                        "details": {
+                            "calculated_distance_km": scenic_distance_km,
+                            "straight_line_distance_km": round(straight_distance_km, 2),
+                            "suggestion": "Le località potrebbero essere troppo vicine per un percorso panoramico."
+                        }
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
 
             # Prepare response data
@@ -401,17 +514,25 @@ class RouteViewSet(viewsets.ModelViewSet):
                 },
             }
 
+            # Add distance information
+            scenic_result["distance_info"] = {
+                "straight_line_km": round(straight_distance_km, 2),
+                "scenic_route_km": scenic_distance_km,
+                "fastest_route_km": scenic_result.get("fastest_route", {}).get("total_distance_km", 0),
+                "detour_factor": round(scenic_distance_km / straight_distance_km,
+                                       2) if straight_distance_km > 0 else 1.0,
+            }
+
             # Add processing time
             scenic_result["processing_time_ms"] = round(processing_time * 1000, 2)
             scenic_result["can_save"] = (
-                request.user.is_authenticated
-                and hasattr(request.user, "role")
-                and request.user.role != "VISITOR"
+                    request.user.is_authenticated
+                    and hasattr(request.user, "role")
+                    and request.user.role != "VISITOR"
             )
 
             # Data for possible saving
-            if scenic_result.get("can_save") and scenic_result.get("scenic_route"):
-                scenic_route_data = scenic_result["scenic_route"]
+            if scenic_result.get("can_save") and scenic_route_data:
                 scenic_result["calculation_data"] = {
                     "start_location": {"lat": start_lat, "lon": start_lon},
                     "end_location": {"lat": end_lat, "lon": end_lon},
@@ -428,6 +549,13 @@ class RouteViewSet(viewsets.ModelViewSet):
                     "poi_count": scenic_route_data.get("poi_count", 0),
                 }
 
+            # Log del successo
+            logger.info(f"Scenic route calculated successfully: "
+                        f"{scenic_distance_km:.2f} km, "
+                        f"{scenic_route_data.get('total_time_minutes', 0):.1f} min, "
+                        f"score: {scenic_route_data.get('scenic_score', 0):.1f}/100, "
+                        f"POIs: {scenic_route_data.get('poi_count', 0)}")
+
             return Response(scenic_result, status=status.HTTP_200_OK)
 
         except ValueError as e:
@@ -435,6 +563,7 @@ class RouteViewSet(viewsets.ModelViewSet):
                 {
                     "error": f"Invalid input: {str(e)}",
                     "validation": validation_result,
+                    "distance_km": round(straight_distance_km, 2),
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -449,6 +578,7 @@ class RouteViewSet(viewsets.ModelViewSet):
                 {
                     "error": f"Error calculating scenic route: {str(e)}",
                     "validation": validation_result,
+                    "distance_km": round(straight_distance_km, 2),
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
@@ -465,7 +595,7 @@ class RouteViewSet(viewsets.ModelViewSet):
             return Response(
                 {
                     "error": "Utenti VISITOR non possono salvare percorsi."
-                    " Registrati per salvare."
+                             " Registrati per salvare."
                 },
                 status=status.HTTP_403_FORBIDDEN,
             )
@@ -553,7 +683,7 @@ class RouteViewSet(viewsets.ModelViewSet):
                 "route_updated": route_serializer.data,
                 "recalculation_success": recalculation_result,
                 "message": "Stop added successfully"
-                + (" and route recalculated" if recalculation_result else ""),
+                           + (" and route recalculated" if recalculation_result else ""),
             }
 
             return Response(response_data, status=status.HTTP_201_CREATED)
@@ -726,8 +856,8 @@ class StopViewSet(viewsets.ModelViewSet):
 
         # Determine order if not provided
         if (
-            "order" not in serializer.validated_data
-            or not serializer.validated_data["order"]
+                "order" not in serializer.validated_data
+                or not serializer.validated_data["order"]
         ):
             last_stop = route.stops.order_by("-order").first()
             serializer.validated_data["order"] = (
