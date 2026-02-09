@@ -320,14 +320,16 @@ class RoutingCostCalculator:
                 stats["total_segments"] = cursor.fetchone()[0]
 
                 # Count segments with costs
-                cursor.execute("""
-                    SELECT 
+                cursor.execute(
+                    """
+                    SELECT
                         COUNT(CASE WHEN cost_time > 0 THEN 1 END) as time_cost,
                         COUNT(CASE WHEN cost_length > 0 THEN 1 END) as length_cost,
                         COUNT(CASE WHEN cost_scenic > 0 THEN 1 END) as scenic_cost,
                         COUNT(CASE WHEN cost_balanced > 0 THEN 1 END) as balanced_cost
                     FROM gis_data_roadsegment
-                """)
+                """
+                )
 
                 row = cursor.fetchone()
                 if row:
@@ -342,6 +344,7 @@ class RoutingCostCalculator:
         except Exception as e:
             logger.error(f"Error verifying costs: {e}")
             return stats
+
 
 class MetricsPipeline:
     """Pipeline for calculating all metrics."""

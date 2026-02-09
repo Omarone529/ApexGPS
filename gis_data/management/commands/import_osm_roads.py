@@ -28,7 +28,7 @@ class RegionalRoadImporter:
         self.batch_size = batch_size
 
     def import_region(
-            self, region_name: str, clear_existing: bool = False
+        self, region_name: str, clear_existing: bool = False
     ) -> dict[str, Any]:
         """Import roads for a specific region."""
         logger.info(f"🚗 Importing roads for: {region_name}")
@@ -72,7 +72,7 @@ class RegionalRoadImporter:
         ways_with_geometry = 0
 
         # Limita per test
-        max_ways = 5000 if region_name.lower() == "test" else float('inf')
+        max_ways = 5000 if region_name.lower() == "test" else float("inf")
 
         for i, element in enumerate(elements):
             if element.get("type") == "way":
@@ -84,7 +84,9 @@ class RegionalRoadImporter:
 
                 if "geometry" in element and len(element["geometry"]) >= 2:
                     ways_with_geometry += 1
-                    segment = RoadDataProcessor.create_road_segment(element, region_name)
+                    segment = RoadDataProcessor.create_road_segment(
+                        element, region_name
+                    )
                     if segment:
                         segments.append(segment)
                         if len(segments) % 100 == 0:
@@ -138,13 +140,15 @@ class RegionalRoadImporter:
         }
 
     def _save_segments_batch(
-            self, segments: list, region_name: str, clear_existing: bool
+        self, segments: list, region_name: str, clear_existing: bool
     ) -> int:
         """Save a batch of road segments."""
         if clear_existing:
             try:
                 deleted = RoadSegment.objects.filter(region=region_name).delete()[0]
-                logger.info(f"Cleared {deleted} existing road segments for {region_name}")
+                logger.info(
+                    f"Cleared {deleted} existing road segments for {region_name}"
+                )
             except Exception as e:
                 logger.error(f"Error clearing segments: {e}")
 
@@ -257,7 +261,9 @@ class Command(BaseCommand):
         # Import region per region con pausa
         for i, region in enumerate(OSMConfig.ALL_REGIONS):
             logger.info(f"\n{'=' * 60}")
-            logger.info(f"Importing region {i + 1}/{len(OSMConfig.ALL_REGIONS)}: {region}")
+            logger.info(
+                f"Importing region {i + 1}/{len(OSMConfig.ALL_REGIONS)}: {region}"
+            )
 
             result = importer.import_region(region, clear_existing=False)
 
@@ -266,15 +272,19 @@ class Command(BaseCommand):
                 logger.info(f"{region}: {result['segments_saved']} segments imported")
             else:
                 failed_regions.append(region)
-                logger.error(f" {region} failed: {result.get('error', 'Unknown error')}")
+                logger.error(
+                    f" {region} failed: {result.get('error', 'Unknown error')}"
+                )
 
             if region != OSMConfig.ALL_REGIONS[-1]:
                 logger.info("Pausing for 30 seconds...")
                 time.sleep(30)
 
         logger.info(f"\n{'=' * 60}")
-        logger.info(f"Import completed: {len(successful_regions)} successful, "
-                    f"{len(failed_regions)} failed")
+        logger.info(
+            f"Import completed: {len(successful_regions)} successful, "
+            f"{len(failed_regions)} failed"
+        )
 
         return {
             "success": len(successful_regions) > 0,
@@ -322,11 +332,15 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS("✅ IMPORT SUCCESSFUL"))
 
             if "successful_regions" in result:
-                self.stdout.write(f"Regions imported: {len(result['successful_regions'])}")
+                self.stdout.write(
+                    f"Regions imported: {len(result['successful_regions'])}"
+                )
                 for region in result["successful_regions"][:5]:
                     self.stdout.write(f"  ✓ {region}")
                 if len(result["successful_regions"]) > 5:
-                    self.stdout.write(f"  ... and {len(result['successful_regions']) - 5} more")
+                    self.stdout.write(
+                        f"  ... and {len(result['successful_regions']) - 5} more"
+                    )
 
             if "total_segments" in result:
                 self.stdout.write(f"Segments saved: {result['total_segments']:,}")
@@ -342,11 +356,14 @@ class Command(BaseCommand):
         self.stdout.write("\n" + "-" * 60)
         self.stdout.write("DATABASE STATUS:")
         self.stdout.write(f"Total road segments: {total_roads:,}")
-        self.stdout.write(f"Segments with costs: {roads_with_cost:,} ({roads_with_cost / total_roads * 100:.1f}%)")
+        self.stdout.write(
+            f"Segments with costs: {roads_with_cost:,} "
+            f"({roads_with_cost / total_roads * 100:.1f}%)"
+        )
 
         if total_roads > 0:
-            avg_length = RoadSegment.objects.aggregate(avg=Avg('length_m'))['avg'] or 0
-            avg_cost = RoadSegment.objects.aggregate(avg=Avg('cost_time'))['avg'] or 0
+            avg_length = RoadSegment.objects.aggregate(avg=Avg("length_m"))["avg"] or 0
+            avg_cost = RoadSegment.objects.aggregate(avg=Avg("cost_time"))["avg"] or 0
             self.stdout.write(f"Average length: {avg_length:.1f}m")
             self.stdout.write(f"Average time cost: {avg_cost:.1f}s")
 

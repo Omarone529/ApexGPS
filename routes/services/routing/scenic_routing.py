@@ -5,6 +5,7 @@ from django.contrib.gis.geos import Point
 from django.db import connection
 
 from .base_routing import BaseRoutingService
+from .fast_routing import FastRoutingService
 from .utils import (
     _calculate_path_metrics,
     _create_route_geometry,
@@ -26,20 +27,23 @@ class POIStop:
     """Represents a Point of Interest stop along a scenic motorcycle route."""
 
     def __init__(
-            self,
-            poi_id: int,
-            name: str,
-            category: str,
-            location: Point,
-            scenic_value: float,
+        self,
+        poi_id: int,
+        name: str,
+        category: str,
+        location: Point,
+        scenic_value: float,
     ):
+        """Initialize POI stop."""
         self.poi_id = poi_id
         self.name = name
         self.category = category
         self.location = location
         self.scenic_value = scenic_value
+        """Initialize class."""
 
     def to_dict(self) -> dict:
+        """Convert class to dict."""
         return {
             "poi_id": self.poi_id,
             "name": self.name,
@@ -50,6 +54,8 @@ class POIStop:
 
 
 class ScenicRoutingService(BaseRoutingService):
+    """Select best scenic route to show."""
+
     MAX_TIME_EXCESS_MINUTES = 40.0
 
     MAX_POI_DISTANCE_M = 800.0
@@ -91,6 +97,7 @@ class ScenicRoutingService(BaseRoutingService):
     }
 
     def __init__(self, preference: str = "balanced"):
+        """Initialize the routing service."""
         if preference not in self.PREFERENCE_CONFIGS:
             raise ValueError(
                 f"Preference must be one of: {list(self.PREFERENCE_CONFIGS.keys())}"
@@ -104,6 +111,7 @@ class ScenicRoutingService(BaseRoutingService):
         self._poi_cache = {}
 
     def get_cost_column(self) -> str:
+        """Get cost method."""
         time_weight = self.config["time_weight"]
         poi_weight = self.config["poi_weight"]
         scenic_weight = self.config["scenic_weight"]
@@ -120,27 +128,30 @@ class ScenicRoutingService(BaseRoutingService):
         curvature_component = "(2.0 - LEAST(COALESCE(curvature, 1.0), 2.0))"
 
         highway_penalty = """
-            CASE 
-                WHEN highway IN ('motorway', 'motorway_link', 'trunk', 'trunk_link') THEN 3.0
+            CASE
+                WHEN highway IN ('motorway', 'motorway_link', 'trunk', 'trunk_link')
+                 THEN 3.0
                 WHEN highway IN ('primary', 'primary_link') THEN 1.8
                 WHEN highway IN ('secondary', 'tertiary') THEN 0.9
-                WHEN highway IN ('unclassified', 'residential', 'track', 'path') THEN 0.8
+                WHEN highway IN ('unclassified', 'residential', 'track', 'path')
+                 THEN 0.8
                 ELSE 1.0
             END
         """
 
         cost_expression = f"""
-            (({time_component} * {time_weight}) + 
-             ({poi_component} * {poi_weight}) + 
-             ({scenic_component} * {scenic_weight}) + 
+            (({time_component} * {time_weight}) +
+             ({poi_component} * {poi_weight}) +
+             ({scenic_component} * {scenic_weight}) +
              ({curvature_component} * {curvature_weight})) * {highway_penalty}
         """
 
-        simplified = ' '.join(cost_expression.split())
+        simplified = " ".join(cost_expression.split())
         logger.debug(f"Generated cost expression for {self.preference} preference")
         return simplified
 
     def get_secondary_cost_column(self) -> str:
+        """Get secondary cost method if first fail."""
         time_weight = 0.4
         poi_weight = 0.25
         scenic_weight = 0.20
@@ -154,7 +165,7 @@ class ScenicRoutingService(BaseRoutingService):
         curvature_component = "(2.0 - LEAST(COALESCE(curvature, 1.0), 2.0))"
 
         secondary_bonus = """
-            CASE 
+            CASE
                 WHEN highway = 'secondary' THEN 0.7
                 WHEN highway = 'tertiary' THEN 0.7
                 WHEN highway = 'unclassified' THEN 0.7
@@ -164,7 +175,7 @@ class ScenicRoutingService(BaseRoutingService):
                 ELSE 1.3
             END
         """
-        secondary_bonus = ' '.join(secondary_bonus.split())
+        secondary_bonus = " ".join(secondary_bonus.split())
 
         cost_expression = (
             f"(({time_component} * {time_weight}) + "
@@ -177,8 +188,9 @@ class ScenicRoutingService(BaseRoutingService):
         return cost_expression
 
     def _find_pois_along_route(
-            self, segments: list[dict], max_distance_m: float = 500.0
+        self, segments: list[dict], max_distance_m: float = 500.0
     ) -> list[POIStop]:
+        """Search POI along route."""
         if not segments:
             logger.debug("No segments provided for POI search")
             return []
@@ -220,7 +232,9 @@ class ScenicRoutingService(BaseRoutingService):
                         max_distance_m * 2,
                         segment_ids,
                         self.config.get("max_poi_distance_m", self.MAX_POI_DISTANCE_M),
-                        self.config.get("min_poi_scenic_value", self.MIN_POI_SCENIC_VALUE),
+                        self.config.get(
+                            "min_poi_scenic_value", self.MIN_POI_SCENIC_VALUE
+                        ),
                         self.config["max_pois"] * 3,
                     ],
                 )
@@ -272,12 +286,13 @@ class ScenicRoutingService(BaseRoutingService):
             return []
 
     def _calculate_poi_scenic_value(
-            self,
-            category: str,
-            importance_score: float,
-            segment_count: int,
-            distance_m: float = 0.0,
+        self,
+        category: str,
+        importance_score: float,
+        segment_count: int,
+        distance_m: float = 0.0,
     ) -> float:
+        """Calculate scenic value based on importance score."""
         category_weights = {
             "panoramic": 3.0,
             "mountain_pass": 3.5,
@@ -300,11 +315,12 @@ class ScenicRoutingService(BaseRoutingService):
         distance_penalty = 1.0 - min(distance_m / max_allowed_distance, 0.5)
 
         scenic_value = (
-                base_weight * importance_score * proximity_factor * distance_penalty
+            base_weight * importance_score * proximity_factor * distance_penalty
         )
         return round(scenic_value, 2)
 
     def _calculate_route_scenic_metrics(self, segments: list[dict]) -> dict[str, float]:
+        """Calculate scenic metrics based on segments."""
         if not segments:
             logger.debug("No segments provided for scenic metrics calculation")
             return {
@@ -356,10 +372,7 @@ class ScenicRoutingService(BaseRoutingService):
         secondary_component = min(secondary_road_percent * 0.1, 10)
 
         scenic_score = (
-                scenic_component +
-                poi_component +
-                curvature_component +
-                secondary_component
+            scenic_component + poi_component + curvature_component + secondary_component
         )
 
         scenic_score = min(100.0, max(0.0, scenic_score))
@@ -383,15 +396,16 @@ class ScenicRoutingService(BaseRoutingService):
                 "poi": round(poi_component, 1),
                 "curvature": round(curvature_component, 1),
                 "secondary_roads": round(secondary_component, 1),
-            }
+            },
         }
 
         logger.debug(f"Calculated scenic metrics: {metrics['total_scenic_score']}/100")
         return metrics
 
     def _calculate_scenic_route_basic(
-            self, start_vertex: int, end_vertex: int, force_secondary: bool = False
+        self, start_vertex: int, end_vertex: int, force_secondary: bool = False
     ) -> list[int] | None:
+        """Calculate base scenic route."""
         if force_secondary:
             cost_column = self.get_secondary_cost_column()
         else:
@@ -400,7 +414,9 @@ class ScenicRoutingService(BaseRoutingService):
         cache_key = (start_vertex, end_vertex, self.preference, force_secondary)
 
         if cache_key in self._route_cache:
-            logger.debug(f"Returning basic route from cache: {start_vertex}->{end_vertex}")
+            logger.debug(
+                f"Returning basic route from cache: {start_vertex}->{end_vertex}"
+            )
             return self._route_cache[cache_key]
 
         try:
@@ -431,8 +447,9 @@ class ScenicRoutingService(BaseRoutingService):
             return None
 
     def _check_route_sanity(
-            self, segments: list[dict], start_point: Point, end_point: Point
+        self, segments: list[dict], start_point: Point, end_point: Point
     ) -> tuple[bool, str]:
+        """Check if route is a good route to use."""
         if not segments:
             return False, "Empty route"
 
@@ -460,13 +477,18 @@ class ScenicRoutingService(BaseRoutingService):
         circuitous_factor = total_distance_km / straight_line_km
 
         if circuitous_factor > self.MAX_CIRCUITOUS_FACTOR:
-            return False, f"Route too circuitous (factor: {circuitous_factor:.2f}, max: {self.MAX_CIRCUITOUS_FACTOR})"
+            return (
+                False,
+                f"Route too circuitous (factor: {circuitous_factor:.2f}, "
+                f"max: {self.MAX_CIRCUITOUS_FACTOR})",
+            )
 
         return True, f"Route reasonable (circuitous factor: {circuitous_factor:.2f})"
 
     def calculate_route(
-            self, start_point: Point, end_point: Point, **kwargs
+        self, start_point: Point, end_point: Point, **kwargs
     ) -> dict | None:
+        """Calculate route."""
         start_time = time.time()
         vertex_threshold = kwargs.get("vertex_threshold", self.DEFAULT_VERTEX_THRESHOLD)
         reference_fastest_time = kwargs.get("reference_fastest_time")
@@ -546,7 +568,9 @@ class ScenicRoutingService(BaseRoutingService):
                         _get_segments_by_ids(route_edges), start_point, end_point
                     )
                     if not is_sane_poi:
-                        logger.warning(f"POI route sanity check failed: {poi_sanity_message}")
+                        logger.warning(
+                            f"POI route sanity check failed: {poi_sanity_message}"
+                        )
                         route_edges = basic_edges
                         included_pois = []
                 else:
@@ -573,7 +597,7 @@ class ScenicRoutingService(BaseRoutingService):
 
             if reference_fastest_time and route_metrics["total_time_minutes"] > 0:
                 time_excess_minutes = (
-                        route_metrics["total_time_minutes"] - reference_fastest_time
+                    route_metrics["total_time_minutes"] - reference_fastest_time
                 )
                 is_within_constraint = time_excess_minutes <= max_time_excess_minutes
 
@@ -638,15 +662,16 @@ class ScenicRoutingService(BaseRoutingService):
             return None
 
     def _build_route_through_pois(
-            self,
-            start_vertex: int,
-            end_vertex: int,
-            pois: list[POIStop],
-            reference_fastest_time: float | None,
-            max_time_excess_minutes: float,
-            basic_route_time: float = 0.0,
-            force_secondary: bool = False,
+        self,
+        start_vertex: int,
+        end_vertex: int,
+        pois: list[POIStop],
+        reference_fastest_time: float | None,
+        max_time_excess_minutes: float,
+        basic_route_time: float = 0.0,
+        force_secondary: bool = False,
     ) -> tuple[list[int], list[POIStop]]:
+        """Build route using POIs."""
         sorted_pois = sorted(pois, key=lambda p: p.scenic_value, reverse=True)
 
         min_pois = self.config["min_pois"]
@@ -769,14 +794,15 @@ class ScenicRoutingService(BaseRoutingService):
             return basic_edges, []
 
     def calculate_scenic_route(
-            self,
-            start_lat: float,
-            start_lon: float,
-            end_lat: float,
-            end_lon: float,
-            reference_fastest_time: float | None = None,
-            **kwargs,
+        self,
+        start_lat: float,
+        start_lon: float,
+        end_lat: float,
+        end_lon: float,
+        reference_fastest_time: float | None = None,
+        **kwargs,
     ) -> dict | None:
+        """Calculate the scenic route."""
         for coord_name, lat, lon in [
             ("start", start_lat, start_lon),
             ("end", end_lat, end_lon),
@@ -796,15 +822,14 @@ class ScenicRoutingService(BaseRoutingService):
         )
 
     def calculate_with_fastest_reference(
-            self,
-            start_lat: float,
-            start_lon: float,
-            end_lat: float,
-            end_lon: float,
-            **kwargs,
+        self,
+        start_lat: float,
+        start_lon: float,
+        end_lat: float,
+        end_lon: float,
+        **kwargs,
     ) -> dict:
-        from .fast_routing import FastRoutingService
-
+        """Calculate fastest route for reference."""
         logger.info("Calculating scenic route with fastest reference")
 
         fast_service = FastRoutingService()
@@ -869,7 +894,7 @@ class ScenicRoutingService(BaseRoutingService):
                 "scenic_score": scenic_route.get("total_scenic_score", 0),
                 "recommendation": "scenic"
                 if time_excess <= self.MAX_TIME_EXCESS_MINUTES
-                   and scenic_route.get("total_scenic_score", 0) > 60
+                and scenic_route.get("total_scenic_score", 0) > 60
                 else "fastest",
             },
         }
