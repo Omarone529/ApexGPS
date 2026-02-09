@@ -32,7 +32,6 @@ __all__ = [
 
 
 def _validate_coordinates(lat: float, lon: float) -> tuple[bool, str]:
-    """Validate geographic coordinates."""
     if not (-90 <= lat <= 90):
         return False, f"Latitude {lat} is out of valid range (-90 to 90)"
 
@@ -43,7 +42,6 @@ def _validate_coordinates(lat: float, lon: float) -> tuple[bool, str]:
 
 
 def _find_nearest_vertex(point: Point, distance_threshold: float = 0.01) -> int | None:
-    """Find nearest routing vertex to a geographic point."""
     point_wkt = f"SRID=4326;POINT({point.x} {point.y})"
 
     queries = [
@@ -118,8 +116,7 @@ def _find_nearest_vertex(point: Point, distance_threshold: float = 0.01) -> int 
             logger.warning(f"Query {i + 1} failed: {str(e)}")
             continue
 
-    # If nothing found with current threshold, try with slightly larger one
-    if distance_threshold < 0.02:  # Don't go too large
+    if distance_threshold < 0.02:
         logger.debug(f"No vertex found with threshold {distance_threshold}, trying 0.02")
         return _find_nearest_vertex(point, distance_threshold=0.02)
 
@@ -128,7 +125,6 @@ def _find_nearest_vertex(point: Point, distance_threshold: float = 0.01) -> int 
 
 
 def _get_road_segment_by_id(segment_id: int) -> dict | None:
-    """Get road segment by its ID."""
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -152,7 +148,6 @@ def _get_road_segment_by_id(segment_id: int) -> dict | None:
 def _get_road_segment_by_vertices(
     source_vertex: int, target_vertex: int
 ) -> dict | None:
-    """Get road segment between two vertices."""
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -176,7 +171,6 @@ def _get_road_segment_by_vertices(
 
 
 def _row_to_segment_dict(row: tuple) -> dict:
-    """Convert database row to segment dictionary."""
     segment = {
         "id": row[0],
         "osm_id": row[1],
@@ -188,7 +182,6 @@ def _row_to_segment_dict(row: tuple) -> dict:
         "curvature": float(row[7]) if row[7] else 0.0,
     }
 
-    # Parse geometry if available
     if row[8]:
         segment["geometry_coords"] = _extract_coordinates_from_wkt(row[8])
 
@@ -196,17 +189,15 @@ def _row_to_segment_dict(row: tuple) -> dict:
 
 
 def _extract_coordinates_from_wkt(wkt: str) -> list[tuple[float, float]]:
-    """Extract coordinates from WKT LINESTRING."""
     if not wkt or not wkt.startswith("LINESTRING"):
         return []
 
     try:
         coord_str = wkt.replace("LINESTRING(", "").replace(")", "")
-        # Split by commas and parse coordinates
         coords = []
         for point in coord_str.split(","):
             x, y = map(float, point.strip().split())
-            coords.append((x, y))  # (lon, lat)
+            coords.append((x, y))
         return coords
     except Exception as e:
         logger.error(f"Error parsing WKT: {e}")
@@ -214,7 +205,6 @@ def _extract_coordinates_from_wkt(wkt: str) -> list[tuple[float, float]]:
 
 
 def _calculate_path_metrics(segments: list[dict]) -> dict:
-    """Calculate total metrics for a list of road segments."""
     if not segments:
         return {
             "total_distance_m": 0.0,
@@ -237,12 +227,9 @@ def _calculate_path_metrics(segments: list[dict]) -> dict:
 
 
 def _encode_linestring_to_polyline(geometry: LineString) -> str:
-    """Convert LineString geometry to encoded polyline."""
     if not geometry or geometry.empty:
         return ""
 
-    # geometry.coords returns (x, y) = (lon, lat)
-    # polyline.encode expects (lat, lon)
     lat_lon_coords = [(lat, lon) for lon, lat in geometry.coords]
     return polyline.encode(lat_lon_coords)
 
@@ -250,7 +237,6 @@ def _encode_linestring_to_polyline(geometry: LineString) -> str:
 def _create_linestring_from_coords(
     coords: list[tuple[float, float]]
 ) -> LineString | None:
-    """Create LineString from list of (lon, lat) coordinates."""
     if not coords:
         return None
 
@@ -263,15 +249,16 @@ def _create_linestring_from_coords(
 
 
 def _execute_dijkstra_query(
-    start_vertex: int, end_vertex: int, cost_column: str = "cost_time"
+        start_vertex: int, end_vertex: int, cost_column: str = "cost_time"
 ) -> list[tuple]:
-    """Execute Dijkstra algorithm query and return results."""
     with connection.cursor() as cursor:
+        escaped_cost_column = cost_column.replace("'", "''")
+
         query = f"""
             SELECT seq, path_seq, node, edge, cost, agg_cost
             FROM pgr_dijkstra(
-                'SELECT id, source, target, {cost_column} as cost,
-                 {cost_column} as reverse_cost
+                'SELECT id, source, target, {escaped_cost_column} as cost,
+                 {escaped_cost_column} as reverse_cost
                  FROM gis_data_roadsegment
                  WHERE geometry IS NOT NULL
                  AND source IS NOT NULL
@@ -286,21 +273,17 @@ def _execute_dijkstra_query(
 
 
 def _extract_edges_from_dijkstra_result(dijkstra_result: list[tuple]) -> list[int]:
-    """Extract edge IDs from Dijkstra result."""
     if not dijkstra_result:
         return []
 
-    # edge column is at index 3, exclude -1 values
     return [row[3] for row in dijkstra_result if row[3] >= 0]
 
 
 def _get_segments_by_ids(segment_ids: list[int]) -> list[dict]:
-    """Get multiple road segments by their IDs in order."""
     if not segment_ids:
         return []
 
     with connection.cursor() as cursor:
-        # Create array of IDs for PostgreSQL
         ids_array = "{" + ",".join(map(str, segment_ids)) + "}"
 
         query = """
@@ -320,7 +303,6 @@ def _get_segments_by_ids(segment_ids: list[int]) -> list[dict]:
 
 
 def _create_route_geometry(segments: list[dict]) -> LineString | None:
-    """Create complete route geometry from segments."""
     all_coords = []
 
     for segment in segments:
@@ -332,7 +314,6 @@ def _create_route_geometry(segments: list[dict]) -> LineString | None:
 
 
 def _format_time_minutes(minutes: float) -> str:
-    """Format minutes to human-readable time string."""
     hours = int(minutes // 60)
     mins = int(minutes % 60)
 
@@ -342,7 +323,6 @@ def _format_time_minutes(minutes: float) -> str:
 
 
 def _format_distance_km(distance_km: float) -> str:
-    """Format distance to human-readable string."""
     if distance_km >= 100:
         return f"{distance_km:.0f} km"
     elif distance_km >= 10:
@@ -352,7 +332,6 @@ def _format_distance_km(distance_km: float) -> str:
 
 
 def _calculate_route_segments(routing_service, points: list) -> dict:
-    """Calculate route through multiple points."""
     if len(points) < 2:
         return {
             "success": False,
@@ -418,14 +397,11 @@ def _prepare_route_response(
     validation_result: dict,
     processing_time: float,
 ) -> dict:
-    """Prepare standardized route response."""
     return {
         "route_type": "fastest",
         "purpose": "baseline_for_scenic_routes",
-        # Location names
         "start_location": start_data.get("name"),
         "end_location": end_data.get("name"),
-        # Coordinates
         "start_coordinates": {
             "lat": start_data.get("lat"),
             "lon": start_data.get("lon"),
@@ -434,38 +410,31 @@ def _prepare_route_response(
             "lat": end_data.get("lat"),
             "lon": end_data.get("lon"),
         },
-        # Route metrics
         "total_distance_km": fastest_route.get("total_distance_km", 0),
         "total_time_minutes": fastest_route.get("total_time_minutes", 0),
         "total_distance_m": fastest_route.get("total_distance_m", 0),
         "total_time_seconds": fastest_route.get("total_time_seconds", 0),
         "segment_count": fastest_route.get("segment_count", 0),
         "total_segments": fastest_route.get("total_segments", 0),
-        # Formatted metrics
         "total_distance_formatted": _format_distance_km(
             fastest_route.get("total_distance_km", 0)
         ),
         "total_time_formatted": _format_time_minutes(
             fastest_route.get("total_time_minutes", 0)
         ),
-        # Geometry
         "polyline": fastest_route.get("polyline", ""),
         "has_geometry": fastest_route.get("geometry") is not None,
-        # Network info
         "start_vertex": fastest_route.get("start_vertex"),
         "end_vertex": fastest_route.get("end_vertex"),
         "vertex_count": fastest_route.get("vertex_count", 0),
-        # Validation
         "validation": {
             "is_valid": validation_result.get("is_valid", False),
             "warnings": validation_result.get("warnings", []),
             "start_vertex": validation_result.get("start_vertex"),
             "end_vertex": validation_result.get("end_vertex"),
         },
-        # Processing info
         "processing_time_ms": round(processing_time * 1000, 2),
         "database_status": "real_osm_data",
-        # Geocoding info
         "geocoding_status": {
             "start_geocoded": start_data.get("geocoded", False),
             "end_geocoded": end_data.get("geocoded", False),
@@ -476,12 +445,10 @@ def _prepare_route_response(
 
 
 def _get_segments_with_scenic_data(edge_ids: list[int]) -> list[dict]:
-    """Get road segments with scenic data (scenic_rating, curvature)."""
     if not edge_ids:
         return []
 
     with connection.cursor() as cursor:
-        # Create array of IDs for PostgreSQL
         ids_array = "{" + ",".join(map(str, edge_ids)) + "}"
 
         query = """
@@ -502,7 +469,6 @@ def _get_segments_with_scenic_data(edge_ids: list[int]) -> list[dict]:
 
 
 def _calculate_route_scenic_stats(segments: list[dict]) -> dict:
-    """Calculate detailed scenic statistics for a route."""
     if not segments:
         return {
             "has_scenic_data": False,
@@ -514,14 +480,12 @@ def _calculate_route_scenic_stats(segments: list[dict]) -> dict:
     scenic_segments = [s for s in segments if s.get("scenic_rating") is not None]
     curvy_segments = [s for s in segments if s.get("curvature", 0) > 0.7]
 
-    # Calculate scenic rating distribution
     rating_distribution = {}
     for segment in scenic_segments:
         rating = segment.get("scenic_rating", 0)
         rating_key = f"rating_{int(rating)}"
         rating_distribution[rating_key] = rating_distribution.get(rating_key, 0) + 1
 
-    # Calculate length by scenic quality
     length_by_quality = {"high": 0.0, "medium": 0.0, "low": 0.0}
     for segment in segments:
         rating = segment.get("scenic_rating", 2.5)
@@ -541,7 +505,6 @@ def _calculate_route_scenic_stats(segments: list[dict]) -> dict:
                 length_by_quality[key] / total_length * 100, 1
             )
 
-    # Calculate curvature statistics
     curvature_values = [
         s.get("curvature", 0) for s in segments if s.get("curvature") is not None
     ]
@@ -569,7 +532,6 @@ def _calculate_route_scenic_stats(segments: list[dict]) -> dict:
 def _compare_routes_scenic_quality(
     route1_segments: list[dict], route2_segments: list[dict]
 ) -> dict:
-    """Compare scenic quality between two routes."""
 
     def calculate_route_score(segments):
         if not segments:
@@ -583,7 +545,6 @@ def _compare_routes_scenic_quality(
             curvature = segment.get("curvature", 0.5)
             length = segment.get("length_m", 0)
 
-            # Combined score: scenic rating boosted by curvature
             score = rating * (1.0 + curvature)
 
             total_score += score * length
@@ -593,7 +554,7 @@ def _compare_routes_scenic_quality(
             return 0.0
 
         avg_score = total_score / total_length
-        return (avg_score / 5.0) * 100  # Convert to 0-100 scale
+        return (avg_score / 5.0) * 100
 
     score1 = calculate_route_score(route1_segments)
     score2 = calculate_route_score(route2_segments)
@@ -615,7 +576,6 @@ def _compare_routes_scenic_quality(
 
 
 def _is_secondary_road(highway_type: str) -> bool:
-    """Check if a highway type is considered a secondary road for scenic routing."""
     secondary_types = {
         "secondary",
         "tertiary",
@@ -631,7 +591,6 @@ def _is_secondary_road(highway_type: str) -> bool:
 
 
 def _calculate_segment_secondary_length(segment: dict) -> float:
-    """Calculate the length of a segment if it's a secondary road."""
     length = segment.get("length_m", 0)
     highway = segment.get("highway", "")
 
@@ -641,7 +600,6 @@ def _calculate_segment_secondary_length(segment: dict) -> float:
 
 
 def _calculate_total_route_length(segments: list[dict]) -> float:
-    """Calculate total length of all route segments in meters."""
     if not segments:
         return 0.0
 
@@ -652,7 +610,6 @@ def _calculate_total_route_length(segments: list[dict]) -> float:
 
 
 def _calculate_secondary_road_length(segments: list[dict]) -> float:
-    """Calculate total length of secondary road segments in meters."""
     if not segments:
         return 0.0
 
@@ -663,7 +620,6 @@ def _calculate_secondary_road_length(segments: list[dict]) -> float:
 
 
 def _get_secondary_road_percentage(segments: list[dict]) -> float:
-    """Calculate percentage of route that uses secondary roads."""
     if not segments:
         return 0.0
 

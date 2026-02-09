@@ -55,7 +55,7 @@ class ScenicRoutingService(BaseRoutingService):
     MAX_POI_DISTANCE_M = 800.0
     MIN_POI_SCENIC_VALUE = 3.0
     MAX_DETOUR_FACTOR = 1.2
-    MAX_CIRCUITOUS_FACTOR = 1.7
+    MAX_CIRCUITOUS_FACTOR = 2
 
     PREFERENCE_CONFIGS = {
         "fast": {
