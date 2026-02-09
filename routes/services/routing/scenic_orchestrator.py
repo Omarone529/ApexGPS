@@ -19,31 +19,33 @@ class ScenicRouteOrchestrator:
 
     @staticmethod
     def find_best_scenic_route_with_constraint(
-            start_point: Point,
-            end_point: Point,
-            preference: str = "balanced",
-            vertex_threshold: float = 0.01,
+        start_point: Point,
+        end_point: Point,
+        preference: str = "balanced",
+        vertex_threshold: float = 0.01,
     ) -> dict:
         """Find best scenic route that respects time constraint."""
         start_time = time.time()
 
         logger.info(
             f"Starting scenic route calculation: "
-            f"({start_point.y:.6f}, {start_point.x:.6f}) to ({end_point.y:.6f}, {start_point.x:.6f}), "
+            f"({start_point.y:.6f}, {start_point.x:.6f})"
+            f" to ({end_point.y:.6f}, {start_point.x:.6f}), "
             f"preference: {preference}"
         )
 
-        # IMPORTANTE: Verifica che i punti non siano troppo vicini
-        # Calcola distanza approssimativa in km
-        lat_diff = abs(start_point.y - end_point.y) * 111  # 1 grado lat = ~111 km
-        lon_diff = abs(start_point.x - end_point.x) * 111 * 0.6  # 1 grado lon = ~66 km a latitudini italiane
-        straight_distance_km = (lat_diff ** 2 + lon_diff ** 2) ** 0.5
+        lat_diff = abs(start_point.y - end_point.y) * 111
+        lon_diff = (
+            abs(start_point.x - end_point.x) * 111 * 0.6
+        )  # 1 grado lon = ~66 km a latitudini italiane
+        straight_distance_km = (lat_diff**2 + lon_diff**2) ** 0.5
 
-        if straight_distance_km < 1.0:  # Se i punti sono a meno di 1km
+        if straight_distance_km < 1.0:
             logger.warning(f"Points too close: {straight_distance_km:.2f} km")
             return {
                 "success": False,
-                "error": f"I punti sono troppo vicini ({straight_distance_km:.2f} km). Inserisci località più distanti.",
+                "error": f"I punti sono troppo vicini ({straight_distance_km:.2f} km)."
+                f" Inserisci località più distanti.",
                 "error_details": {
                     "stage": "distance_validation",
                     "distance_km": round(straight_distance_km, 2),
@@ -116,7 +118,9 @@ class ScenicRouteOrchestrator:
 
         # CORREZIONE CRITICA: Gestisci il caso in cui scenic_result è None
         if not scenic_result:
-            logger.warning("Scenic route calculation failed, but fastest route is available")
+            logger.warning(
+                "Scenic route calculation failed, but fastest route is available"
+            )
 
             # Crea un risultato panoramico di fallback basato sul percorso veloce
             # MA con un punteggio panoramico realistico
@@ -177,9 +181,13 @@ class ScenicRouteOrchestrator:
             },
             "scenic_route": {
                 "total_time_seconds": scenic_result.get("total_time_seconds", 0),
-                "total_time_minutes": scenic_result.get("total_time_minutes", fastest_minutes),
+                "total_time_minutes": scenic_result.get(
+                    "total_time_minutes", fastest_minutes
+                ),
                 "total_distance_km": scenic_result.get("total_distance_km", 0),
-                "scenic_score": scenic_result.get("scenic_score", 50.0),  # Usa scenic_score, non total_scenic_score
+                "scenic_score": scenic_result.get(
+                    "scenic_score", 50.0
+                ),  # Usa scenic_score, non total_scenic_score
                 "avg_scenic_rating": scenic_result.get("avg_scenic_rating", 0),
                 "avg_curvature": scenic_result.get("avg_curvature", 0),
                 "total_poi_density": scenic_result.get("total_poi_density", 0),
@@ -215,12 +223,12 @@ class ScenicRouteOrchestrator:
 
     @staticmethod
     def calculate_from_coordinates(
-            start_lat: float,
-            start_lon: float,
-            end_lat: float,
-            end_lon: float,
-            preference: str = "balanced",
-            **kwargs,
+        start_lat: float,
+        start_lon: float,
+        end_lat: float,
+        end_lon: float,
+        preference: str = "balanced",
+        **kwargs,
     ) -> dict:
         """Calculate scenic route from coordinates with validation."""
         # Validate coordinates

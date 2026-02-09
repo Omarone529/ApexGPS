@@ -1,12 +1,13 @@
 import logging
+import math
 import os
 import re
 import time
-import math
 from typing import Any
 
 import requests
-from django.contrib.gis.geos import LineString, Point
+from django.contrib.gis.geos import LineString
+
 logger = logging.getLogger(__name__)
 
 
@@ -231,7 +232,10 @@ class RoadDataProcessor:
             # Haversine formula
             dlat = lat2_rad - lat1_rad
             dlon = lon2_rad - lon1_rad
-            a = math.sin(dlat / 2) ** 2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2) ** 2
+            a = (
+                math.sin(dlat / 2) ** 2
+                + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2) ** 2
+            )
             c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
             distance = 6371000 * c  # Earth radius in meters
 
@@ -259,8 +263,8 @@ class RoadDataProcessor:
             dot = v1_lon * v2_lon + v1_lat * v2_lat
 
             # Calculate magnitudes
-            mag1 = math.sqrt(v1_lon ** 2 + v1_lat ** 2)
-            mag2 = math.sqrt(v2_lon ** 2 + v2_lat ** 2)
+            mag1 = math.sqrt(v1_lon**2 + v1_lat**2)
+            mag2 = math.sqrt(v2_lon**2 + v2_lat**2)
 
             if mag1 == 0 or mag2 == 0:
                 continue
@@ -284,11 +288,17 @@ class RoadDataProcessor:
         highway_type = tags.get("highway", "unclassified")
 
         # Get base speed and scenic rating
-        base_speed = OSMConfig.HIGHWAY_SPEEDS.get(highway_type, OSMConfig.HIGHWAY_SPEEDS["default"])
-        base_scenic = OSMConfig.HIGHWAY_SCENIC_RATINGS.get(highway_type, OSMConfig.HIGHWAY_SCENIC_RATINGS["default"])
+        base_speed = OSMConfig.HIGHWAY_SPEEDS.get(
+            highway_type, OSMConfig.HIGHWAY_SPEEDS["default"]
+        )
+        base_scenic = OSMConfig.HIGHWAY_SCENIC_RATINGS.get(
+            highway_type, OSMConfig.HIGHWAY_SCENIC_RATINGS["default"]
+        )
 
         parsed = {
-            "maxspeed": RoadDataProcessor._parse_maxspeed(tags.get("maxspeed"), base_speed),
+            "maxspeed": RoadDataProcessor._parse_maxspeed(
+                tags.get("maxspeed"), base_speed
+            ),
             "oneway": tags.get("oneway") == "yes",
             "surface": tags.get("surface", ""),
             "lanes": RoadDataProcessor._parse_lanes(tags.get("lanes")),
@@ -313,7 +323,7 @@ class RoadDataProcessor:
                 maxspeed_str = maxspeed_str.replace(unit, "")
 
             # Extract first number
-            numbers = re.findall(r'\d+', maxspeed_str)
+            numbers = re.findall(r"\d+", maxspeed_str)
             if numbers:
                 speed = int(numbers[0])
                 # Sanity check

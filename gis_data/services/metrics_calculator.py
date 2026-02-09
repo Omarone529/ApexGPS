@@ -1,12 +1,12 @@
-from django.db import connection
-import time
 import logging
+import time
+
+from django.db import connection
 
 logger = logging.getLogger(__name__)
 
-__all__ = [
-    "MetricsCalculator"
-]
+__all__ = ["MetricsCalculator"]
+
 
 class MetricsCalculator:
     """
@@ -114,18 +114,19 @@ class MetricsCalculator:
     @staticmethod
     def _update_poi_density():
         """Calculate and update POI density within 1km buffer."""
-
         # Process 5000 segments at a time
         batch_size = 5000
         total_updated = 0
 
         with connection.cursor() as cursor:
-            cursor.execute("""
-                SELECT COUNT(*) 
-                FROM gis_data_roadsegment 
-                WHERE geometry IS NOT NULL 
+            cursor.execute(
+                """
+                SELECT COUNT(*)
+                FROM gis_data_roadsegment
+                WHERE geometry IS NOT NULL
                 AND (poi_density = 0 OR poi_density IS NULL)
-            """)
+            """
+            )
             total_to_process = cursor.fetchone()[0]
 
             if total_to_process == 0:
@@ -133,7 +134,9 @@ class MetricsCalculator:
                 return 0
 
             logger.info(
-                f"Starting POI density calculation for {total_to_process:,} segments (batch size: {batch_size})")
+                f"Starting POI density calculation for {total_to_process:,}"
+                f" segments (batch size: {batch_size})"
+            )
 
             # Get approximate segments per minute
             start_time = time.time()
@@ -142,7 +145,8 @@ class MetricsCalculator:
             for offset in range(0, total_to_process, batch_size):
                 batch_start = time.time()
 
-                cursor.execute(f"""
+                cursor.execute(
+                    f"""
                     -- Process one batch of segments
                     WITH batch_segments AS (
                         SELECT id, geometry, length_m
@@ -153,9 +157,10 @@ class MetricsCalculator:
                         LIMIT {batch_size} OFFSET {offset}
                     ),
                     segment_densities AS (
-                        SELECT 
+                        SELECT
                             bs.id,
-                            COUNT(poi.id)::float / GREATEST(bs.length_m, 1000.0) as density
+                            COUNT(poi.id)::float / GREATEST(bs.length_m, 1000.0)
+                            as density
                         FROM batch_segments bs
                         LEFT JOIN gis_data_pointofinterest poi ON ST_DWithin(
                             bs.geometry::geography,
@@ -168,7 +173,8 @@ class MetricsCalculator:
                     SET poi_density = sd.density
                     FROM segment_densities sd
                     WHERE rs.id = sd.id
-                """)
+                """
+                )
 
                 batch_updated = cursor.rowcount
                 total_updated += batch_updated
@@ -187,7 +193,8 @@ class MetricsCalculator:
                     eta_minutes = 0
 
                 logger.info(
-                    f"POI density: Processed {current_progress:,}/{total_to_process:,} segments "
+                    f"POI density: Processed {current_progress:,}/{total_to_process:,} "
+                    f"segments "
                     f"({percent_complete:.1f}%) "
                     f"- Batch: {batch_elapsed:.1f}s "
                     f"- ETA: {eta_minutes:.1f} min"
@@ -198,7 +205,10 @@ class MetricsCalculator:
                     time.sleep(0.2)
 
             total_elapsed = time.time() - start_time
-            logger.info(f"POI density calculation complete: {total_updated:,} segments updated in {total_elapsed:.1f}s")
+            logger.info(
+                f"POI density calculation complete: {total_updated:,} "
+                f"segments updated in {total_elapsed:.1f}s"
+            )
             return total_updated
 
     @staticmethod
@@ -209,19 +219,24 @@ class MetricsCalculator:
 
         with connection.cursor() as cursor:
             # Get total segments to process
-            cursor.execute("""
-                SELECT COUNT(*) 
-                FROM gis_data_roadsegment 
-                WHERE geometry IS NOT NULL 
+            cursor.execute(
+                """
+                SELECT COUNT(*)
+                FROM gis_data_roadsegment
+                WHERE geometry IS NOT NULL
                 AND (weighted_poi_density = 0 OR weighted_poi_density IS NULL)
-            """)
+            """
+            )
             total_to_process = cursor.fetchone()[0]
 
             if total_to_process == 0:
                 logger.info("No segments need weighted POI density calculation")
                 return 0
 
-            logger.info(f"Starting weighted POI density calculation for {total_to_process:,} segments")
+            logger.info(
+                f"Starting weighted POI density calculation for {total_to_process:,}"
+                f" segments"
+            )
 
             # Get approximate segments per minute for ETA
             start_time = time.time()
@@ -230,7 +245,8 @@ class MetricsCalculator:
             for offset in range(0, total_to_process, batch_size):
                 batch_start = time.time()
 
-                cursor.execute(f"""
+                cursor.execute(
+                    f"""
                     -- Process one batch of segments
                     WITH batch_segments AS (
                         SELECT id, geometry, length_m
@@ -241,9 +257,9 @@ class MetricsCalculator:
                         LIMIT {batch_size} OFFSET {offset}
                     ),
                     segment_weighted_densities AS (
-                        SELECT 
+                        SELECT
                             bs.id,
-                            COALESCE(SUM(poi.importance_score), 0) / 
+                            COALESCE(SUM(poi.importance_score), 0) /
                             GREATEST(bs.length_m, 1000.0) as weighted_density
                         FROM batch_segments bs
                         LEFT JOIN gis_data_pointofinterest poi ON ST_DWithin(
@@ -257,7 +273,8 @@ class MetricsCalculator:
                     SET weighted_poi_density = swd.weighted_density
                     FROM segment_weighted_densities swd
                     WHERE rs.id = swd.id
-                """)
+                """
+                )
 
                 batch_updated = cursor.rowcount
                 total_updated += batch_updated
@@ -276,7 +293,8 @@ class MetricsCalculator:
                     eta_minutes = 0
 
                 logger.info(
-                    f"Weighted POI density: Processed {current_progress:,}/{total_to_process:,} segments "
+                    f"Weighted POI density: Processed {current_progress:,}/"
+                    f"{total_to_process:,} segments "
                     f"({percent_complete:.1f}%) "
                     f"- Batch: {batch_elapsed:.1f}s "
                     f"- ETA: {eta_minutes:.1f} min"
@@ -288,7 +306,9 @@ class MetricsCalculator:
 
             total_elapsed = time.time() - start_time
             logger.info(
-                f"Weighted POI density calculation complete: {total_updated:,} segments updated in {total_elapsed:.1f}s")
+                f"Weighted POI density calculation complete: {total_updated:,} "
+                f"segments updated in {total_elapsed:.1f}s"
+            )
             return total_updated
 
     @staticmethod
@@ -314,26 +334,30 @@ class MetricsCalculator:
 
     @staticmethod
     def _enhance_scenic_with_poi_density():
-        """Enhance scenic ratings with POI density bonus - BATCH VERSION."""
+        """Enhance scenic ratings with POI density bonus."""
         batch_size = 10000
         total_updated = 0
 
         with connection.cursor() as cursor:
-
             # Get segments with POI density
-            cursor.execute("""
-                SELECT COUNT(*) 
-                FROM gis_data_roadsegment 
-                WHERE poi_density > 0 
+            cursor.execute(
+                """
+                SELECT COUNT(*)
+                FROM gis_data_roadsegment
+                WHERE poi_density > 0
                 AND scenic_rating > 0
-            """)
+            """
+            )
             total_to_process = cursor.fetchone()[0]
 
             if total_to_process == 0:
                 logger.info("No segments need scenic rating enhancement")
                 return 0
 
-            logger.info(f"Enhancing scenic ratings for {total_to_process:,} segments with POI density")
+            logger.info(
+                f"Enhancing scenic ratings for {total_to_process:,}"
+                f" segments with POI density"
+            )
 
             # Get approximate segments per minute for ETA
             start_time = time.time()
@@ -342,20 +366,22 @@ class MetricsCalculator:
             for offset in range(0, total_to_process, batch_size):
                 batch_start = time.time()
 
-                cursor.execute(f"""
+                cursor.execute(
+                    f"""
                     UPDATE gis_data_roadsegment
                     SET scenic_rating = LEAST(10.0,
                         scenic_rating + (poi_density * 0.5)
                     )
                     WHERE id IN (
-                        SELECT id 
-                        FROM gis_data_roadsegment 
-                        WHERE poi_density > 0 
+                        SELECT id
+                        FROM gis_data_roadsegment
+                        WHERE poi_density > 0
                         AND scenic_rating > 0
                         ORDER BY id
                         LIMIT {batch_size} OFFSET {offset}
                     )
-                """)
+                """
+                )
 
                 batch_updated = cursor.rowcount
                 total_updated += batch_updated
@@ -372,7 +398,8 @@ class MetricsCalculator:
                     eta_minutes = 0
 
                 logger.info(
-                    f"Scenic enhancement: Processed {current_progress:,}/{total_to_process:,} segments "
+                    f"Scenic enhancement: Processed {current_progress:,}/"
+                    f"{total_to_process:,} segments "
                     f"({percent_complete:.1f}%) "
                     f"- Batch: {batch_elapsed:.1f}s "
                     f"- ETA: {eta_minutes:.1f} min"
@@ -380,7 +407,9 @@ class MetricsCalculator:
 
             total_elapsed = time.time() - start_time
             logger.info(
-                f"Scenic rating enhancement complete: {total_updated:,} segments updated in {total_elapsed:.1f}s")
+                f"Scenic rating enhancement complete: {total_updated:,}"
+                f" segments updated in {total_elapsed:.1f}s"
+            )
             return total_updated
 
     @staticmethod
@@ -445,7 +474,10 @@ class MetricsCalculator:
         results["low_scenic_segments"] = stats[3] or 0
 
         total_elapsed = time.time() - overall_start_time
-        logger.info(f"All scenic score calculations completed in {total_elapsed:.1f}s ({total_elapsed / 60:.1f} min)")
+        logger.info(
+            f"All scenic score calculations completed in "
+            f"{total_elapsed:.1f}s ({total_elapsed / 60:.1f} min)"
+        )
 
         return results
 

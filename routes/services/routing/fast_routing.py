@@ -26,7 +26,7 @@ class FastRoutingService(BaseRoutingService):
         return "cost_time"
 
     def calculate_route(
-            self, start_point: Point, end_point: Point, **kwargs
+        self, start_point: Point, end_point: Point, **kwargs
     ) -> dict | None:
         """Calculate fastest route between two points."""
         vertex_threshold = kwargs.get("vertex_threshold", self.DEFAULT_VERTEX_THRESHOLD)
@@ -35,8 +35,13 @@ class FastRoutingService(BaseRoutingService):
         if use_progressive_search:
             try:
                 from .utils import _find_nearest_vertex_with_progressive_threshold
-                start_vertex, _ = _find_nearest_vertex_with_progressive_threshold(start_point, vertex_threshold)
-                end_vertex, _ = _find_nearest_vertex_with_progressive_threshold(end_point, vertex_threshold)
+
+                start_vertex, _ = _find_nearest_vertex_with_progressive_threshold(
+                    start_point, vertex_threshold
+                )
+                end_vertex, _ = _find_nearest_vertex_with_progressive_threshold(
+                    end_point, vertex_threshold
+                )
             except ImportError:
                 start_vertex = _find_nearest_vertex(start_point, vertex_threshold)
                 end_vertex = _find_nearest_vertex(end_point, vertex_threshold)
@@ -81,12 +86,12 @@ class FastRoutingService(BaseRoutingService):
         }
 
     def calculate_fastest_route(
-            self,
-            start_lat: float,
-            start_lon: float,
-            end_lat: float,
-            end_lon: float,
-            **kwargs,
+        self,
+        start_lat: float,
+        start_lon: float,
+        end_lat: float,
+        end_lon: float,
+        **kwargs,
     ) -> dict | None:
         """Calculate route from coordinates."""
         # Validate coordinates

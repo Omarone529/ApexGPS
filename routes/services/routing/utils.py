@@ -45,12 +45,11 @@ def _find_nearest_vertex(point: Point, distance_threshold: float = 0.01) -> int 
     point_wkt = f"SRID=4326;POINT({point.x} {point.y})"
 
     queries = [
-
-        #Find vertices with >= 3 connections on drivable roads (most reliable)
+        # Find vertices with >= 3 connections on drivable roads (most reliable)
         """
         SELECT v.id, COUNT(r.id) as connections
         FROM gis_data_roadsegment_vertices_pgr v
-        LEFT JOIN gis_data_roadsegment r ON 
+        LEFT JOIN gis_data_roadsegment r ON
             (r.source = v.id OR r.target = v.id)
             AND r.is_active = true
             AND r.highway NOT IN ('footway', 'path', 'cycleway', 'steps')
@@ -60,12 +59,11 @@ def _find_nearest_vertex(point: Point, distance_threshold: float = 0.01) -> int 
         ORDER BY COUNT(r.id) DESC, ST_Distance(v.the_geom, ST_GeomFromEWKT(%s))
         LIMIT 1
         """,
-
         # Find vertices with >= 2 connections on drivable roads
         """
         SELECT v.id, COUNT(r.id) as connections
         FROM gis_data_roadsegment_vertices_pgr v
-        LEFT JOIN gis_data_roadsegment r ON 
+        LEFT JOIN gis_data_roadsegment r ON
             (r.source = v.id OR r.target = v.id)
             AND r.is_active = true
             AND r.highway NOT IN ('footway', 'path', 'cycleway', 'steps')
@@ -75,12 +73,11 @@ def _find_nearest_vertex(point: Point, distance_threshold: float = 0.01) -> int 
         ORDER BY COUNT(r.id) DESC, ST_Distance(v.the_geom, ST_GeomFromEWKT(%s))
         LIMIT 1
         """,
-
         # Find any vertex with at least 1 connection
         """
         SELECT v.id, COUNT(r.id) as connections
         FROM gis_data_roadsegment_vertices_pgr v
-        LEFT JOIN gis_data_roadsegment r ON 
+        LEFT JOIN gis_data_roadsegment r ON
             (r.source = v.id OR r.target = v.id)
             AND r.is_active = true
         WHERE ST_DWithin(v.the_geom, ST_GeomFromEWKT(%s), %s)
@@ -89,7 +86,6 @@ def _find_nearest_vertex(point: Point, distance_threshold: float = 0.01) -> int 
         ORDER BY COUNT(r.id) DESC, ST_Distance(v.the_geom, ST_GeomFromEWKT(%s))
         LIMIT 1
         """,
-
         # find ANY vertex
         """
         SELECT v.id
@@ -97,7 +93,7 @@ def _find_nearest_vertex(point: Point, distance_threshold: float = 0.01) -> int 
         WHERE ST_DWithin(v.the_geom, ST_GeomFromEWKT(%s), %s)
         ORDER BY ST_Distance(v.the_geom, ST_GeomFromEWKT(%s))
         LIMIT 1
-        """
+        """,
     ]
 
     for i, query in enumerate(queries):
@@ -109,7 +105,10 @@ def _find_nearest_vertex(point: Point, distance_threshold: float = 0.01) -> int 
                 if result:
                     vertex_id = result[0]
                     connections = result[1] if len(result) > 1 else "unknown"
-                    logger.debug(f"Found vertex {vertex_id} with {connections} connections (query {i + 1})")
+                    logger.debug(
+                        f"Found vertex {vertex_id} with {connections} "
+                        f"connections (query {i + 1})"
+                    )
                     return vertex_id
 
         except Exception as e:
@@ -117,7 +116,9 @@ def _find_nearest_vertex(point: Point, distance_threshold: float = 0.01) -> int 
             continue
 
     if distance_threshold < 0.02:
-        logger.debug(f"No vertex found with threshold {distance_threshold}, trying 0.02")
+        logger.debug(
+            f"No vertex found with threshold {distance_threshold}, trying 0.02"
+        )
         return _find_nearest_vertex(point, distance_threshold=0.02)
 
     logger.warning(f"No vertices found within 0.02 degrees of point {point}")
@@ -249,7 +250,7 @@ def _create_linestring_from_coords(
 
 
 def _execute_dijkstra_query(
-        start_vertex: int, end_vertex: int, cost_column: str = "cost_time"
+    start_vertex: int, end_vertex: int, cost_column: str = "cost_time"
 ) -> list[tuple]:
     with connection.cursor() as cursor:
         escaped_cost_column = cost_column.replace("'", "''")
@@ -532,7 +533,6 @@ def _calculate_route_scenic_stats(segments: list[dict]) -> dict:
 def _compare_routes_scenic_quality(
     route1_segments: list[dict], route2_segments: list[dict]
 ) -> dict:
-
     def calculate_route_score(segments):
         if not segments:
             return 0.0
