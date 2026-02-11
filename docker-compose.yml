@@ -2,7 +2,7 @@ services:
   db:
     build: ./db
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql
       - ./dem_data:/dem_data
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
     environment:
@@ -16,6 +16,8 @@ services:
       interval: 10s
       timeout: 10s
       retries: 20
+      start_period: 30s
+
   web:
     build: .
     volumes:
@@ -27,7 +29,7 @@ services:
         condition: service_healthy
     command: >
       sh -c "
-        sleep 3 &&
+        sleep 5 &&
         python manage.py migrate &&
         python manage.py load_operational_dataset --verbose &&
         python manage.py runserver 0.0.0.0:8000
@@ -49,5 +51,6 @@ services:
       NOMINATIM_URL: ${NOMINATIM_URL}
       PYTHONMALLOC: malloc
       MALLOC_ARENA_MAX: 2
+
 volumes:
   pgdata:

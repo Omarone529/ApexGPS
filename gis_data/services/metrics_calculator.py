@@ -1,7 +1,10 @@
-import logging
-import time
+import concurrent.futures
+import threading
+from multiprocessing import cpu_count
 
-from django.db import connection
+from django.db import connection, connections
+import time
+import logging
 
 logger = logging.getLogger(__name__)
 
@@ -111,9 +114,11 @@ class MetricsCalculator:
 
         return results
 
+    #TODO
     @staticmethod
     def _update_poi_density():
         """Calculate and update POI density within 1km buffer."""
+
         # Process 5000 segments at a time
         batch_size = 5000
         total_updated = 0
@@ -211,6 +216,7 @@ class MetricsCalculator:
             )
             return total_updated
 
+    #TODO
     @staticmethod
     def _update_weighted_poi_density():
         """Calculate and update weighted POI density - BATCH VERSION."""
@@ -311,6 +317,7 @@ class MetricsCalculator:
             )
             return total_updated
 
+    #TODO
     @staticmethod
     def _assign_base_scenic_ratings():
         """Assign initial scenic ratings based on road classification."""
@@ -332,6 +339,7 @@ class MetricsCalculator:
             logger.info(f"Base scenic ratings assigned to {updated:,} segments")
             return updated
 
+    #TODO
     @staticmethod
     def _enhance_scenic_with_poi_density():
         """Enhance scenic ratings with POI density bonus."""
@@ -412,6 +420,7 @@ class MetricsCalculator:
             )
             return total_updated
 
+    #TODO
     @staticmethod
     def _get_scenic_statistics():
         """Get statistics about scenic ratings and POI density."""
@@ -432,52 +441,215 @@ class MetricsCalculator:
 
     @staticmethod
     def calculate_scenic_scores():
-        """Calculate scenic quality scores for road segments."""
+        """
+        Calculate scenic quality scores for road segments using multi-threaded processing.
+        Each thread processes a batch of segments with its own database connection.
+        """
         results = {}
+        overall_start = time.time()
 
-        overall_start_time = time.time()
+        logger.info("Starting multi-threaded scenic scores calculation...")
 
-        logger.info("Step 1/4: Calculating POI density...")
-        start_time = time.time()
-        results["poi_density_calculated"] = MetricsCalculator._update_poi_density()
-        step_elapsed = time.time() - start_time
-        logger.info(f"Step 1 completed in {step_elapsed:.1f}s")
+        # Determine number of worker threads (use 75% of available CPUs)
+        num_workers = max(2, int(cpu_count() * 0.75))
+        logger.info(f"Using {num_workers} worker threads")
 
-        logger.info("Step 2/4: Calculating weighted POI density...")
-        start_time = time.time()
-        results[
-            "weighted_poi_density_calculated"
-        ] = MetricsCalculator._update_weighted_poi_density()
-        step_elapsed = time.time() - start_time
-        logger.info(f"Step 2 completed in {step_elapsed:.1f}s")
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                           SELECT MIN(id) as min_id, MAX(id) as max_id, COUNT(*) as total_count
+                           FROM gis_data_roadsegment
+                           WHERE geometry IS NOT NULL
+                           """)
+            min_id, max_id, total_segments = cursor.fetchone()
 
-        logger.info("Step 3/4: Assigning base scenic ratings...")
-        start_time = time.time()
-        results[
-            "scenic_ratings_assigned"
-        ] = MetricsCalculator._assign_base_scenic_ratings()
-        step_elapsed = time.time() - start_time
-        logger.info(f"Step 3 completed in {step_elapsed:.1f}s")
+        if not total_segments or total_segments == 0:
+            logger.info("No segments with geometry found")
+            return results
 
-        logger.info("Step 4/4: Enhancing scenic ratings with POI density...")
-        start_time = time.time()
-        results[
-            "scenic_ratings_enhanced"
-        ] = MetricsCalculator._enhance_scenic_with_poi_density()
-        step_elapsed = time.time() - start_time
-        logger.info(f"Step 4 completed in {step_elapsed:.1f}s")
+        logger.info(f"Processing {total_segments:,} segments (ID range: {min_id} to {max_id})")
 
-        stats = MetricsCalculator._get_scenic_statistics()
-        results["average_scenic_rating"] = stats[0] or 0
-        results["average_poi_density"] = stats[1] or 0
-        results["highly_scenic_segments"] = stats[2] or 0
-        results["low_scenic_segments"] = stats[3] or 0
+        batches_per_worker = 15
+        total_batches = num_workers * batches_per_worker
+        batch_size = max(100, (max_id - min_id) // total_batches + 1)
 
-        total_elapsed = time.time() - overall_start_time
-        logger.info(
-            f"All scenic score calculations completed in "
-            f"{total_elapsed:.1f}s ({total_elapsed / 60:.1f} min)"
-        )
+        # Create batch ranges
+        batch_ranges = []
+        current_id = min_id
+        batch_num = 0
+
+        while current_id <= max_id:
+            batch_end = min(current_id + batch_size - 1, max_id)
+            batch_ranges.append((batch_num, current_id, batch_end, len(batch_ranges)))
+            current_id = batch_end + 1
+            batch_num += 1
+
+        total_batches = len(batch_ranges)
+        logger.info(f"Split work into {total_batches:,} batches (~{batch_size} segments per batch)")
+
+        def process_batch(batch_info):
+            batch_num, start_id, end_id, total_batches = batch_info
+            thread_name = threading.current_thread().name
+            batch_start = time.time()
+
+            try:
+                # Each thread gets its own database connection
+                with connections['default'].cursor() as cursor:
+                    cursor.execute(f"""
+                        WITH batch_segments AS (
+                            SELECT id, geometry, length_m, highway
+                            FROM gis_data_roadsegment
+                            WHERE id BETWEEN {start_id} AND {end_id}
+                            AND geometry IS NOT NULL
+                        ),
+                        segment_poi_counts AS (
+                            SELECT 
+                                bs.id,
+                                COUNT(poi.id)::float as poi_count,
+                                COALESCE(SUM(poi.importance_score), 0)::float as weighted_poi_sum
+                            FROM batch_segments bs
+                            LEFT JOIN gis_data_pointofinterest poi ON 
+                                ST_DWithin(
+                                    bs.geometry::geography,
+                                    poi.location::geography,
+                                    1000
+                                )
+                            GROUP BY bs.id
+                        ),
+                        scenic_calculations AS (
+                            SELECT 
+                                bs.id,
+                                spc.poi_count / GREATEST(bs.length_m, 1000.0) as poi_density,
+                                spc.weighted_poi_sum / GREATEST(bs.length_m, 1000.0) as weighted_poi_density,
+                                LEAST(10.0, 
+                                    CASE
+                                        WHEN bs.highway IN ('motorway', 'trunk', 'primary') THEN 3.0
+                                        WHEN bs.highway IN ('secondary', 'tertiary') THEN 5.0
+                                        WHEN bs.highway IN ('unclassified', 'residential') THEN 4.0
+                                        WHEN bs.highway IN ('track', 'path', 'footway') THEN 7.0
+                                        ELSE 5.0
+                                    END + 
+                                    COALESCE((spc.poi_count / GREATEST(bs.length_m, 1000.0)) * 0.5, 0)
+                                ) as scenic_rating
+                            FROM batch_segments bs
+                            LEFT JOIN segment_poi_counts spc ON bs.id = spc.id
+                        )
+                        UPDATE gis_data_roadsegment rs
+                        SET 
+                            poi_density = sc.poi_density,
+                            weighted_poi_density = sc.weighted_poi_density,
+                            scenic_rating = sc.scenic_rating
+                        FROM scenic_calculations sc
+                        WHERE rs.id = sc.id
+                    """)
+
+                    rows_updated = cursor.rowcount
+                    processing_time = time.time() - batch_start
+
+                    return batch_num, rows_updated, processing_time, None
+
+            except Exception as e:
+                processing_time = time.time() - batch_start
+                logger.error(f"Thread {thread_name} - Batch {batch_num} failed: {str(e)[:100]}")
+                return batch_num, 0, processing_time, str(e)
+
+        # Process batches in parallel
+        completed_batches = 0
+        total_updated = 0
+        failed_batches = 0
+        last_log_time = time.time()
+
+        logger.info(f"Starting parallel processing with {num_workers} workers...")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+            future_to_batch = {
+                executor.submit(process_batch, batch_info): batch_info
+                for batch_info in batch_ranges
+            }
+
+            # Process results as they complete
+            for future in concurrent.futures.as_completed(future_to_batch):
+                batch_info = future_to_batch[future]
+                batch_num, start_id, end_id, _ = batch_info
+
+                try:
+                    batch_num, rows_updated, processing_time, error = future.result()
+                    completed_batches += 1
+
+                    if error:
+                        failed_batches += 1
+                    else:
+                        total_updated += rows_updated
+
+                    current_time = time.time()
+                    if current_time - last_log_time >= 5 or completed_batches == total_batches:
+                        percent_complete = (completed_batches / total_batches) * 100
+                        avg_batch_time = (
+                                                     current_time - overall_start) / completed_batches if completed_batches > 0 else 0
+
+                        logger.info(f"Progress: {completed_batches:,}/{total_batches:,} batches "
+                                    f"({percent_complete:.1f}%) - "
+                                    f"{total_updated:,} segments updated - "
+                                    f"Avg batch time: {avg_batch_time:.2f}s")
+                        last_log_time = current_time
+
+                except Exception as e:
+                    logger.error(f"Error processing batch {batch_num}: {e}")
+                    failed_batches += 1
+                    completed_batches += 1
+
+        processing_time = time.time() - overall_start
+        logger.info(f"Parallel processing completed in {processing_time:.1f}s")
+        logger.info(f"Results: {completed_batches:,} batches processed, "
+                    f"{failed_batches:,} failed, {total_updated:,} segments updated")
+
+        # Get final statistics
+        logger.info("Collecting final statistics...")
+        stats_start = time.time()
+
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                           SELECT COUNT(*)                                              as total_segments,
+                                  COUNT(CASE WHEN scenic_rating IS NOT NULL THEN 1 END) as rated_segments,
+                                  ROUND(AVG(scenic_rating)::numeric, 2)                 as avg_scenic,
+                                  ROUND(AVG(poi_density)::numeric, 4)                   as avg_poi_density,
+                                  ROUND(MIN(scenic_rating)::numeric, 2)                 as min_scenic,
+                                  ROUND(MAX(scenic_rating)::numeric, 2)                 as max_scenic,
+                                  COUNT(CASE WHEN scenic_rating >= 8 THEN 1 END)        as highly_scenic,
+                                  COUNT(CASE WHEN scenic_rating <= 3 THEN 1 END)        as low_scenic
+                           FROM gis_data_roadsegment
+                           WHERE geometry IS NOT NULL
+                           """)
+
+            stats = cursor.fetchone()
+
+            results["poi_density_calculated"] = total_updated
+            results["weighted_poi_density_calculated"] = total_updated
+            results["scenic_ratings_assigned"] = total_updated
+            results["scenic_ratings_enhanced"] = total_updated
+            results["average_scenic_rating"] = stats[2] or 0
+            results["average_poi_density"] = stats[3] or 0
+            results["min_scenic_rating"] = stats[4] or 0
+            results["max_scenic_rating"] = stats[5] or 0
+            results["highly_scenic_segments"] = stats[6] or 0
+            results["low_scenic_segments"] = stats[7] or 0
+            results["total_processed_segments"] = stats[0] or 0
+            results["successfully_rated_segments"] = stats[1] or 0
+
+        stats_time = time.time() - stats_start
+
+        total_time = time.time() - overall_start
+        segments_per_second = total_updated / processing_time if processing_time > 0 else 0
+
+        logger.info(f"Statistics collected in {stats_time:.1f}s")
+        logger.info(f"Performance: {segments_per_second:.1f} segments/second")
+        logger.info(f"Scenic rating average: {results['average_scenic_rating']:.2f}")
+        logger.info(f"Scenic rating range: {results['min_scenic_rating']:.2f} to {results['max_scenic_rating']:.2f}")
+        logger.info(f"Highly scenic segments (>=8): {results['highly_scenic_segments']:,}")
+        logger.info(f"Low scenic segments (<=3): {results['low_scenic_segments']:,}")
+        logger.info(f"Total processing time: {total_time:.1f}s ({total_time / 60:.1f} minutes)")
+
+        if failed_batches > 0:
+            logger.warning(f"Warning: {failed_batches:,} batches failed during processing")
 
         return results
 
