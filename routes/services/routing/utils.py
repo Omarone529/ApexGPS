@@ -53,10 +53,10 @@ def _find_nearest_vertex(point: Point, distance_threshold: float = 0.01) -> int 
             (r.source = v.id OR r.target = v.id)
             AND r.is_active = true
             AND r.highway NOT IN ('footway', 'path', 'cycleway', 'steps')
-        WHERE ST_DWithin(v.the_geom, ST_GeomFromEWKT(%s), %s)
-        GROUP BY v.id
+        WHERE ST_DWithin(v.geom, ST_GeomFromEWKT(%s), %s)
+        GROUP BY v.id, v.geom
         HAVING COUNT(r.id) >= 3
-        ORDER BY COUNT(r.id) DESC, ST_Distance(v.the_geom, ST_GeomFromEWKT(%s))
+        ORDER BY COUNT(r.id) DESC, ST_Distance(v.geom, ST_GeomFromEWKT(%s))
         LIMIT 1
         """,
         # Find vertices with >= 2 connections on drivable roads
@@ -67,10 +67,10 @@ def _find_nearest_vertex(point: Point, distance_threshold: float = 0.01) -> int 
             (r.source = v.id OR r.target = v.id)
             AND r.is_active = true
             AND r.highway NOT IN ('footway', 'path', 'cycleway', 'steps')
-        WHERE ST_DWithin(v.the_geom, ST_GeomFromEWKT(%s), %s)
-        GROUP BY v.id
+        WHERE ST_DWithin(v.geom, ST_GeomFromEWKT(%s), %s)
+        GROUP BY v.id, v.geom
         HAVING COUNT(r.id) >= 2
-        ORDER BY COUNT(r.id) DESC, ST_Distance(v.the_geom, ST_GeomFromEWKT(%s))
+        ORDER BY COUNT(r.id) DESC, ST_Distance(v.geom, ST_GeomFromEWKT(%s))
         LIMIT 1
         """,
         # Find any vertex with at least 1 connection
@@ -80,18 +80,18 @@ def _find_nearest_vertex(point: Point, distance_threshold: float = 0.01) -> int 
         LEFT JOIN gis_data_roadsegment r ON
             (r.source = v.id OR r.target = v.id)
             AND r.is_active = true
-        WHERE ST_DWithin(v.the_geom, ST_GeomFromEWKT(%s), %s)
-        GROUP BY v.id
+        WHERE ST_DWithin(v.geom, ST_GeomFromEWKT(%s), %s)
+        GROUP BY v.id, v.geom
         HAVING COUNT(r.id) >= 1
-        ORDER BY COUNT(r.id) DESC, ST_Distance(v.the_geom, ST_GeomFromEWKT(%s))
+        ORDER BY COUNT(r.id) DESC, ST_Distance(v.geom, ST_GeomFromEWKT(%s))
         LIMIT 1
         """,
         # find ANY vertex
         """
         SELECT v.id
         FROM gis_data_roadsegment_vertices_pgr v
-        WHERE ST_DWithin(v.the_geom, ST_GeomFromEWKT(%s), %s)
-        ORDER BY ST_Distance(v.the_geom, ST_GeomFromEWKT(%s))
+        WHERE ST_DWithin(v.geom, ST_GeomFromEWKT(%s), %s)
+        ORDER BY ST_Distance(v.geom, ST_GeomFromEWKT(%s))
         LIMIT 1
         """,
     ]

@@ -13,9 +13,9 @@ def find_nearest_vertex_v4(point, distance_threshold=0.01, table_name='gis_data_
 
     with connection.cursor() as cursor:
         cursor.execute(f"""
-            SELECT id, the_geom
+            SELECT id, geom
             FROM {vertices_table}
-            ORDER BY the_geom <-> ST_SetSRID(ST_Point(%s, %s), 4326)
+            ORDER BY geom <-> ST_SetSRID(ST_Point(%s, %s), 4326)
             LIMIT 1
         """, [lon, lat])
 
