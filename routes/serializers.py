@@ -726,3 +726,26 @@ class GeocodeSearchResultSerializer(serializers.Serializer):
     lon = serializers.FloatField()
     type = serializers.CharField()
     importance = serializers.FloatField(required=False, default=0.5)
+
+class POIPhotoSerializer(serializers.Serializer):
+    """Serializer for individual POI photos."""
+    id = serializers.CharField()
+    url = serializers.URLField()
+    thumbnail = serializers.URLField()
+    date = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    source = serializers.CharField(default='Wikimedia Commons')
+
+
+class POIPhotoResponseSerializer(serializers.Serializer):
+    """
+    Serializer for the complete POI photo response.
+    Includes photos array and Wikipedia description.
+    """
+    photos = POIPhotoSerializer(many=True, required=False, default=[])
+    wikipedia_description = serializers.CharField(
+        required=False,
+        allow_null=True,
+        allow_blank=True,
+        default='',
+        help_text='Breve descrizione del luogo da Wikipedia'
+    )
