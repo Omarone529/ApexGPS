@@ -17,6 +17,7 @@ __all__ = [
     "RouteCalculationResultSerializer",
     "RouteCalculationResponseSerializer",
     "RouteSaveFromCalculationSerializer",
+    "GeocodeSearchResultSerializer"
 ]
 
 
@@ -716,3 +717,12 @@ class RouteSaveFromCalculationSerializer(serializers.Serializer):
         )
 
         return route
+
+class GeocodeSearchResultSerializer(serializers.Serializer):
+    """Serializer for geocode search results."""
+    id = serializers.CharField()
+    display_name = serializers.CharField()
+    lat = serializers.FloatField()
+    lon = serializers.FloatField()
+    type = serializers.CharField()
+    importance = serializers.FloatField(required=False, default=0.5)
