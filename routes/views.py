@@ -15,6 +15,7 @@ from routes.services.routing.utils import _prepare_route_response
 from .models import Route, Stop
 from .permissions import IsOwnerOrReadOnly
 from .serializers import (
+    POIPhotoResponseSerializer,
     RouteCalculationInputSerializer,
     RouteCreateSerializer,
     RouteGeoSerializer,
@@ -1322,8 +1323,6 @@ def poi_photos(request):
                 unique_photos.append(photo)
 
         logger.info(f"Found {len(unique_photos)} relevant photos for {name} after filtering")
-
-        from .serializers import POIPhotoResponseSerializer
 
         response_data = {
             "photos": unique_photos[:5],
