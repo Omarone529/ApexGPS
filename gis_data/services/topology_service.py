@@ -302,7 +302,7 @@ class TopologyService:
                     SELECT 
                         COALESCE(highway, 'unknown') as road_type,
                         COUNT(*) as count,
-                        ROUND(SUM(ST_Length(geometry::geography)) / 1000, 1) as length_km
+                        ROUND((SUM(ST_Length(geometry::geography)) / 1000)::numeric, 1) as length_km
                     FROM {self.table_name}
                     WHERE geometry IS NOT NULL
                     GROUP BY highway
