@@ -61,10 +61,10 @@ class RouteValidator:
             cursor.execute(
                 """
                 SELECT
-                    ST_YMin(ST_Extent(the_geom)) as min_lat,
-                    ST_YMax(ST_Extent(the_geom)) as max_lat,
-                    ST_XMin(ST_Extent(the_geom)) as min_lon,
-                    ST_XMax(ST_Extent(the_geom)) as max_lon
+                    ST_YMin(ST_Extent(geom)) as min_lat,
+                    ST_YMax(ST_Extent(geom)) as max_lat,
+                    ST_XMin(ST_Extent(geom)) as min_lon,
+                    ST_XMax(ST_Extent(geom)) as max_lon
                 FROM gis_data_roadsegment_vertices_pgr
                 """
             )
