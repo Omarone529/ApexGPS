@@ -1,16 +1,14 @@
 from django.urls import path
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.routers import DefaultRouter
-from .views import RouteViewSet, StopViewSet, geocode_search
+from .views import RouteViewSet, StopViewSet, geocode_search, poi_photos
 
 router = DefaultRouter()
 router.register(r"routes", RouteViewSet, basename="route")
 router.register(r"stops", StopViewSet, basename="stop")
 
-# Get URL patterns from router
 urlpatterns = list(router.urls)
 
-# Add the endpoint manually to ensure reverse() works
 urlpatterns.append(
     path(
         "routes/calculate-fastest/",
@@ -32,5 +30,13 @@ urlpatterns.append(
         "geocode/search/",
         geocode_search,
         name="geocode-search",
+    )
+)
+
+urlpatterns.append(
+    path(
+        "pois/photos/",
+        poi_photos,
+        name="poi-photos",
     )
 )
