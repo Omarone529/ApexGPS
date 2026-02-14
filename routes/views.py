@@ -1,10 +1,13 @@
 import time
+import requests
+import logging
 
 from django.contrib.gis.geos import Point
 from django.db import models
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, permissions, status, viewsets
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from gis_data.services.topology_service import logger
@@ -151,7 +154,7 @@ class RouteViewSet(viewsets.ModelViewSet):
             return Response(
                 {
                     "error": "Routing services not available. "
-                    "Please ensure database is prepared."
+                             "Please ensure database is prepared."
                 },
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
@@ -174,18 +177,18 @@ class RouteViewSet(viewsets.ModelViewSet):
 
         lat_diff = abs(start_lat - end_lat) * 111  # 1 grado lat = ~111 km
         lon_diff = abs(start_lon - end_lon) * 111 * 0.6
-        straight_distance_km = (lat_diff**2 + lon_diff**2) ** 0.5
+        straight_distance_km = (lat_diff ** 2 + lon_diff ** 2) ** 0.5
 
         if straight_distance_km < 1.0:  # Se i punti sono a meno di 1km
             return Response(
                 {
                     "error": f"I punti di partenza e arrivo sono troppo vicini"
-                    f" ({straight_distance_km:.2f} km).",
+                             f" ({straight_distance_km:.2f} km).",
                     "details": {
                         "distance_km": round(straight_distance_km, 2),
                         "minimum_required_km": 1.0,
                         "suggestion": "Inserisci località più distanti "
-                        "per un percorso significativo.",
+                                      "per un percorso significativo.",
                     },
                 },
                 status=status.HTTP_400_BAD_REQUEST,
@@ -232,9 +235,9 @@ class RouteViewSet(viewsets.ModelViewSet):
                 return Response(
                     {
                         "error": "No route found between points. Possible reasons:\n"
-                        "1) Points are too close to each other\n"
-                        "2) Road network not available in the area\n"
-                        "3) Database connection issues",
+                                 "1) Points are too close to each other\n"
+                                 "2) Road network not available in the area\n"
+                                 "3) Database connection issues",
                         "validation": validation_result,
                         "distance_km": round(straight_distance_km, 2),
                     },
@@ -247,13 +250,13 @@ class RouteViewSet(viewsets.ModelViewSet):
                 return Response(
                     {
                         "error": f"Il percorso calcolato è troppo breve"
-                        f" ({route_distance_km:.2f} km). "
-                        "Assicurati che le località siano sufficientemente distanti.",
+                                 f" ({route_distance_km:.2f} km). "
+                                 "Assicurati che le località siano sufficientemente distanti.",
                         "details": {
                             "calculated_distance_km": route_distance_km,
                             "straight_line_distance_km": round(straight_distance_km, 2),
                             "suggestion": "Prova con località più distanti"
-                            " o verifica l'input.",
+                                          " o verifica l'input.",
                         },
                     },
                     status=status.HTTP_400_BAD_REQUEST,
@@ -294,9 +297,9 @@ class RouteViewSet(viewsets.ModelViewSet):
 
             # Allow saving only to authenticated non-VISITOR users
             response_data["can_save"] = (
-                request.user.is_authenticated
-                and hasattr(request.user, "role")
-                and request.user.role != "VISITOR"
+                    request.user.is_authenticated
+                    and hasattr(request.user, "role")
+                    and request.user.role != "VISITOR"
             )
 
             # Add data for possible saving
@@ -362,7 +365,7 @@ class RouteViewSet(viewsets.ModelViewSet):
             return Response(
                 {
                     "error": "Scenic routing services not available. "
-                    "Please ensure scenic_routing.py exists."
+                             "Please ensure scenic_routing.py exists."
                 },
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
@@ -372,7 +375,7 @@ class RouteViewSet(viewsets.ModelViewSet):
             return Response(
                 {
                     "error": "Routing services not available. "
-                    "Please ensure database is prepared."
+                             "Please ensure database is prepared."
                 },
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
@@ -394,18 +397,18 @@ class RouteViewSet(viewsets.ModelViewSet):
 
         lat_diff = abs(start_lat - end_lat) * 111
         lon_diff = abs(start_lon - end_lon) * 111 * 0.6
-        straight_distance_km = (lat_diff**2 + lon_diff**2) ** 0.5
+        straight_distance_km = (lat_diff ** 2 + lon_diff ** 2) ** 0.5
 
         if straight_distance_km < 1.0:
             return Response(
                 {
                     "error": f"I punti di partenza e arrivo sono "
-                    f"troppo vicini ({straight_distance_km:.2f} km).",
+                             f"troppo vicini ({straight_distance_km:.2f} km).",
                     "details": {
                         "distance_km": round(straight_distance_km, 2),
                         "minimum_required_km": 1.0,
                         "suggestion": "Per un percorso panoramico significativo,"
-                        " inserisci località più distanti.",
+                                      " inserisci località più distanti.",
                     },
                 },
                 status=status.HTTP_400_BAD_REQUEST,
@@ -468,8 +471,8 @@ class RouteViewSet(viewsets.ModelViewSet):
                 )
 
                 if (
-                    "troppo vicini" in error_msg.lower()
-                    or "too close" in error_msg.lower()
+                        "troppo vicini" in error_msg.lower()
+                        or "too close" in error_msg.lower()
                 ):
                     error_msg = (
                         f"I punti sono troppo vicini per un percorso panoramico"
@@ -494,7 +497,7 @@ class RouteViewSet(viewsets.ModelViewSet):
                     {
                         "error": "Il percorso panoramico non contiene dati validi",
                         "suggestion": "Prova con un'altra coppia"
-                        " di località o cambia preferenza",
+                                      " di località o cambia preferenza",
                         "distance_km": round(straight_distance_km, 2),
                     },
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -508,12 +511,12 @@ class RouteViewSet(viewsets.ModelViewSet):
                 return Response(
                     {
                         "error": f"Il percorso panoramico calcolato è troppo breve"
-                        f" ({scenic_distance_km:.2f} km).",
+                                 f" ({scenic_distance_km:.2f} km).",
                         "details": {
                             "calculated_distance_km": scenic_distance_km,
                             "straight_line_distance_km": round(straight_distance_km, 2),
                             "suggestion": "Le località potrebbero essere"
-                            " troppo vicine per un percorso panoramico.",
+                                          " troppo vicine per un percorso panoramico.",
                         },
                     },
                     status=status.HTTP_400_BAD_REQUEST,
@@ -551,9 +554,9 @@ class RouteViewSet(viewsets.ModelViewSet):
             # Add processing time
             scenic_result["processing_time_ms"] = round(processing_time * 1000, 2)
             scenic_result["can_save"] = (
-                request.user.is_authenticated
-                and hasattr(request.user, "role")
-                and request.user.role != "VISITOR"
+                    request.user.is_authenticated
+                    and hasattr(request.user, "role")
+                    and request.user.role != "VISITOR"
             )
 
             # Data for possible saving
@@ -622,7 +625,7 @@ class RouteViewSet(viewsets.ModelViewSet):
             return Response(
                 {
                     "error": "Utenti VISITOR non possono salvare percorsi."
-                    " Registrati per salvare."
+                             " Registrati per salvare."
                 },
                 status=status.HTTP_403_FORBIDDEN,
             )
@@ -710,7 +713,7 @@ class RouteViewSet(viewsets.ModelViewSet):
                 "route_updated": route_serializer.data,
                 "recalculation_success": recalculation_result,
                 "message": "Stop added successfully"
-                + (" and route recalculated" if recalculation_result else ""),
+                           + (" and route recalculated" if recalculation_result else ""),
             }
 
             return Response(response_data, status=status.HTTP_201_CREATED)
@@ -883,8 +886,8 @@ class StopViewSet(viewsets.ModelViewSet):
 
         # Determine order if not provided
         if (
-            "order" not in serializer.validated_data
-            or not serializer.validated_data["order"]
+                "order" not in serializer.validated_data
+                or not serializer.validated_data["order"]
         ):
             last_stop = route.stops.order_by("-order").first()
             serializer.validated_data["order"] = (
@@ -926,3 +929,78 @@ class StopViewSet(viewsets.ModelViewSet):
 
         # Trigger route recalculation
         RouteRecalculationService.recalculate_route_with_stops(route_id)
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def geocode_search(request):
+    """
+    Search for locations by name.
+    Returns list of matches with coordinates and display names.
+    """
+    query = request.GET.get('q', '').strip()
+    limit = int(request.GET.get('limit', 5))
+
+    if len(query) < 2:
+        return Response([])
+
+    try:
+        from .services.geocoding import GeocodingService
+        from .serializers import GeocodeSearchResultSerializer  # <-- IMPORT
+
+        base_url = GeocodingService._get_nominatim_url()
+
+        params = {
+            "q": query,
+            "format": "json",
+            "limit": limit,
+            "countrycodes": "it",
+            "accept-language": "it",
+            "addressdetails": 1,
+        }
+
+        headers = {"User-Agent": "ApexGPS/1.0"}
+        search_url = f"{base_url}/search"
+
+        response = requests.get(search_url, params=params, headers=headers, timeout=15)
+
+        if response.status_code != 200:
+            return Response([])
+
+        data = response.json()
+        results = []
+
+        for item in data:
+            # Generate a stable ID
+            item_id = f"osm_{item.get('osm_id', '')}_{item.get('osm_type', 'node')}"
+
+            # Determine location type
+            location_type = item.get('type', 'location')
+            if 'address' in item:
+                if 'city' in item['address']:
+                    location_type = 'city'
+                elif 'town' in item['address']:
+                    location_type = 'town'
+                elif 'village' in item['address']:
+                    location_type = 'village'
+                elif 'hamlet' in item['address']:
+                    location_type = 'hamlet'
+
+            results.append({
+                'id': item_id,
+                'display_name': item.get('display_name', ''),
+                'lat': float(item['lat']),
+                'lon': float(item['lon']),
+                'type': location_type,
+                'importance': item.get('importance', 0.5),
+            })
+
+        # Sort by importance
+        results.sort(key=lambda x: x['importance'], reverse=True)
+
+        # Usa il serializer per la risposta
+        serializer = GeocodeSearchResultSerializer(results, many=True)
+        return Response(serializer.data)
+
+    except Exception as e:
+        logger.error(f"Geocode search error: {str(e)}")
+        return Response([])
