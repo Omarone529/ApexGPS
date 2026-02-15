@@ -8,7 +8,8 @@ from .permissions import IsAdminUser
 from .serializers import (
     CustomUserPublicSerializer,
     CustomUserWriteSerializer,
-    RegisterSerializer
+    RegisterSerializer,
+    GoogleAuthSerializer
 )
 
 
@@ -58,6 +59,22 @@ class MeView(APIView):
     def get(self, request):
         return Response(
             CustomUserPublicSerializer(request.user).data,
+            status=status.HTTP_200_OK
+        )
+class GoogleLoginView(APIView):
+    """
+    API endpoint for Google OAuth login.
+    Accepts Google access token and returns JWT tokens.
+    """
+    permission_classes = [permissions.AllowAny]
+    serializer_class = GoogleAuthSerializer
+
+    def post(self, request):
+        serializer = self.serializer_class(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        return Response(
+            serializer.validated_data,
             status=status.HTTP_200_OK
         )
 

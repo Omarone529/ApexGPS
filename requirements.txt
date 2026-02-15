@@ -21,3 +21,5 @@ elevation==1.1.3
 polyline==2.0.4
 psutil==7.2.1
 djangorestframework-simplejwt==5.3.1
+social-auth-app-django==5.4.0
+social-auth-core==4.5.3

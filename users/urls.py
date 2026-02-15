@@ -4,6 +4,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from .jwt import EmailOrUsernameTokenObtainPairSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView
 from .views import RegisterView, MeView, CustomUserViewSet
+from .views import GoogleLoginView
 
 
 class LoginView(TokenObtainPairView):
@@ -23,6 +24,7 @@ urlpatterns = [
     # JWT endpoints
     path('login/', LoginView.as_view(), name='token_obtain_pair'),
     path('refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('login/google/', GoogleLoginView.as_view(), name='google_login'),
 
     # User management endpoints
     path('register/', RegisterView.as_view(), name='register'),
