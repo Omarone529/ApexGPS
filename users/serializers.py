@@ -1,6 +1,9 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
+from rest_framework_simplejwt.tokens import RefreshToken
+from social_core.backends.google import GoogleOAuth2
+from social_django.utils import load_strategy, load_backend
 
 from .models import CustomUser
 
@@ -128,3 +131,36 @@ class RegisterSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         # Always use create_user for hashing and model manager rules
         return User.objects.create_user(**validated_data)
+
+class GoogleAuthSerializer(serializers.Serializer):
+    """Serializer to handle Google token."""
+
+    access_token = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        access_token = attrs.get("access_token")
+
+        try:
+            strategy = load_strategy()
+            backend = load_backend(strategy, GoogleOAuth2.name, redirect_uri=None)
+            user = backend.do_auth(access_token)
+
+            if not user:
+                raise serializers.ValidationError(
+                    "Impossibile autenticare con Google."
+                )
+
+            if not user.is_active:
+                raise serializers.ValidationError("Utente disabilitato.")
+            refresh = RefreshToken.for_user(user)
+
+            return {
+                "user": CustomUserPublicSerializer(user).data,
+                "refresh": str(refresh),
+                "access": str(refresh.access_token),
+            }
+
+        except Exception as e:
+            raise serializers.ValidationError(
+                f"Errore autenticazione Google: {str(e)}"
+            )
