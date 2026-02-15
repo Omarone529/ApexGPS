@@ -1,3 +1,5 @@
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -9,7 +11,7 @@ from .serializers import (
     CustomUserPublicSerializer,
     CustomUserWriteSerializer,
     RegisterSerializer,
-    GoogleAuthSerializer
+    GoogleAuthSerializer,
 )
 
 
@@ -61,6 +63,8 @@ class MeView(APIView):
             CustomUserPublicSerializer(request.user).data,
             status=status.HTTP_200_OK
         )
+
+@method_decorator(csrf_exempt, name='dispatch')
 class GoogleLoginView(APIView):
     """
     API endpoint for Google OAuth login.

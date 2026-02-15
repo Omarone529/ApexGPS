@@ -1,9 +1,9 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
-from rest_framework_simplejwt.tokens import RefreshToken
 from social_core.backends.google import GoogleOAuth2
 from social_django.utils import load_strategy, load_backend
+from rest_framework_simplejwt.tokens import RefreshToken  # <-- NUOVO IMPORT
 
 from .models import CustomUser
 
@@ -143,6 +143,7 @@ class GoogleAuthSerializer(serializers.Serializer):
         try:
             strategy = load_strategy()
             backend = load_backend(strategy, GoogleOAuth2.name, redirect_uri=None)
+
             user = backend.do_auth(access_token)
 
             if not user:
@@ -152,6 +153,7 @@ class GoogleAuthSerializer(serializers.Serializer):
 
             if not user.is_active:
                 raise serializers.ValidationError("Utente disabilitato.")
+
             refresh = RefreshToken.for_user(user)
 
             return {

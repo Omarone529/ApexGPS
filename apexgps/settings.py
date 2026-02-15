@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "django.contrib.gis",
     "django_filters",
+    # OAuth apps
     "social_django",
     # Local apps
     "users.apps.UsersConfig",
@@ -159,6 +160,7 @@ REST_FRAMEWORK = {
     ],
 }
 
+# OAuth Settings
 AUTHENTICATION_BACKENDS = [
     "social_core.backends.google.GoogleOAuth2",
     "django.contrib.auth.backends.ModelBackend",
