@@ -39,11 +39,11 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    # Third party apps
+    # third-party apps
+    "corsheaders",
     "rest_framework",
     "django.contrib.gis",
     "django_filters",
-    "corsheaders",
     # Local apps
     "users.apps.UsersConfig",
     "gis_data.apps.GisDataConfig",
@@ -129,6 +129,9 @@ USE_I18N = True
 
 USE_TZ = True
 
+# GDAL_LIBRARY_PATH = "/usr/lib/x86_64-linux-gnu/libgdal.so"
+# GEOS_LIBRARY_PATH = "/usr/lib/x86_64-linux-gnu/libgeos_c.so"
+
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
@@ -143,14 +146,24 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.AllowAny",
+        "rest_framework.permissions.IsAuthenticated",
     ],
     "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
         "rest_framework.authentication.SessionAuthentication",
         "rest_framework.authentication.BasicAuthentication",
     ],
 }
 
+
 # CORS Configuration
+def _split_env(name: str):
+    v = os.environ.get(name, "")
+    return [x.strip() for x in v.split(",") if x.strip()]
+
+CSRF_TRUSTED_ORIGINS = _split_env("CSRF_TRUSTED_ORIGINS")
+
+
 CORS_ALLOWED_ORIGINS = [
     origin
     for origin in [
@@ -184,3 +197,4 @@ CORS_ALLOW_HEADERS = [
     "x-csrftoken",
     "x-requested-with",
 ]
+

@@ -10,8 +10,16 @@ class APIRootView(APIView):
         """This function is used to return all ViewSet."""
         return Response(
             {
-                # all apps with their endpoints
+                # Authentication endpoints (JWT)
+                "authentication": {
+                    "login": reverse("token_obtain_pair", request=request, format=format),
+                    "refresh": reverse("token_refresh", request=request, format=format),
+                    "register": reverse("register", request=request, format=format),
+                    "me": reverse("me", request=request, format=format),
+                },
+                # Users management
                 "users": reverse("customuser-list", request=request, format=format),
+                # GIS Data
                 "gis_data": {
                     "points-of-interest": reverse(
                         "pointofinterest-list", request=request, format=format
@@ -20,12 +28,14 @@ class APIRootView(APIView):
                         "scenicarea-list", request=request, format=format
                     ),
                 },
+                # DEM Data
                 "dem_data": {
                     "elevation-queries": reverse(
                         "elevationquery-list", request=request, format=format
                     ),
                     "dem": reverse("dem-list", request=request, format=format),
                 },
+                # Routes
                 "routes": {
                     "routes": reverse("route-list", request=request, format=format),
                     "stops": reverse("stop-list", request=request, format=format),
@@ -40,9 +50,7 @@ class APIRootView(APIView):
                     ),
                     "public": reverse("route-public", request=request, format=format),
                 },
-                "authentication": reverse(
-                    "rest_framework:login", request=request, format=format
-                ),
+                # Admin
                 "admin": reverse("admin:index", request=request, format=format),
             }
         )
