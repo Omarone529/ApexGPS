@@ -13,5 +13,7 @@ def create_user_profile(backend, user, response, *args, **kwargs):
             user.first_name = response.get("given_name", "")
         if response.get("family_name"):
             user.last_name = response.get("family_name", "")
+        if response.get("picture"):
+            user.profile_picture = response.get("picture")
 
         user.save()

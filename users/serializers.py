@@ -3,7 +3,7 @@ from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from social_core.backends.google import GoogleOAuth2
 from social_django.utils import load_strategy, load_backend
-from rest_framework_simplejwt.tokens import RefreshToken  # <-- NUOVO IMPORT
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import CustomUser
 
@@ -34,6 +34,7 @@ class CustomUserPublicSerializer(serializers.ModelSerializer):
             "role",
             "first_name",
             "last_name",
+            "profile_picture",
             "is_superuser",
             "is_visitor",
             "is_subscribed",
@@ -71,7 +72,7 @@ class CustomUserWriteSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CustomUser
-        fields = ("email", "username", "password", "first_name", "last_name", "role")
+        fields = ("email", "username", "password", "first_name", "last_name", "role", "profile_picture")
 
     def validate_password(self, value):
         """Validate password using Django validators."""

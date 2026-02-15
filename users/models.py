@@ -24,6 +24,14 @@ class CustomUser(AbstractUser):
         verbose_name=_("Ruolo Utente"),
     )
 
+    profile_picture = models.URLField(
+        max_length=500,
+        blank=True,
+        null=True,
+        verbose_name=_("Foto Profilo"),
+        help_text=_("URL della foto profilo da Google"),
+    )
+
     groups = models.ManyToManyField(
         Group,
         verbose_name=_("Gruppi"),
