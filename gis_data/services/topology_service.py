@@ -29,12 +29,15 @@ class TopologyService:
     """
 
     def __init__(self):
+        #this handle the logic of old _check_topology_columns_exist() and
+        # _add_missing_topology_columns()
         self.table_name = 'gis_data_roadsegment'
         self.vertices_table = f'{self.table_name}_vertices_pgr'
 
     def create_topology(self, tolerance=0.00001, force_rebuild=False):
         """
         Create topology using pgRouting v4.0+ method
+        Integrates old method _get_topology_metrics
         """
         try:
             logger.info(f"Creating topology with pgRouting v4.0+ (tolerance: {tolerance})")
@@ -189,6 +192,12 @@ class TopologyService:
 
     def validate_topology(self):
         """
+        Using the logic of old methods:
+            -_check_vertices_table_exists
+            -_count_disconnected_segments
+            -_count_isolated_vertices
+            -_find_duplicate_edges
+
         Validate topology integrity by checking for:
         - Missing vertices table
         - Disconnected road segments
@@ -263,6 +272,10 @@ class TopologyService:
 
     def get_topology_summary(self):
         """
+        Using the logic of old methods:
+            -_get_road_segment_statistics
+            -_count_total_vertices
+
         Generate comprehensive topology statistics including:
         - Total vs routable segments
         - Vertex and edge counts
