@@ -1,12 +1,12 @@
 import polyline
 import json
 from django.db import connection
-from django.contrib.gis.geos import Point
+# from django.contrib.gis.geos import Point
 
 
-def find_nearest_vertex_v4(point, distance_threshold=0.01, table_name='gis_data_roadsegment'):
+def find_nearest_vertex(point, distance_threshold=0.01, table_name='gis_data_roadsegment'):
     """
-    Find nearest routing vertex using v4.0 optimized query.
+    Find nearest routing vertex using optimized query.
     """
     lon, lat = point.x, point.y
     vertices_table = f'{table_name}_vertices_pgr'
@@ -25,10 +25,10 @@ def find_nearest_vertex_v4(point, distance_threshold=0.01, table_name='gis_data_
         return None, None
 
 
-def calculate_route_v4(start_point, end_point, cost_column='cost_time',
-                       table_name='gis_data_roadsegment', directed=True):
+def calculate_route(start_point, end_point, cost_column='cost_time',
+                    table_name='gis_data_roadsegment', directed=True):
     """
-    Calculate route using pgRouting v4.0 with optimized queries.
+    Calculate route using pgRouting with optimized queries.
 
     Returns: {
         'geometry': GeoJSON LineString,
@@ -36,10 +36,19 @@ def calculate_route_v4(start_point, end_point, cost_column='cost_time',
         'time': total time in seconds,
         'segments': list of segment details
     }
+
+    Unifies old methods as:
+        -get_road_segments
+        -calculate_dijkstra_path
+        -extract_vertex_ids
+        -get_path_segments
+        -calculate_total_distance
+        -calculate_total_time
+        -encode_path_to_polyline
     """
     # Find nearest vertices
-    start_vertex, start_geom = find_nearest_vertex_v4(start_point, table_name=table_name)
-    end_vertex, end_geom = find_nearest_vertex_v4(end_point, table_name=table_name)
+    start_vertex, start_geom = find_nearest_vertex(start_point, table_name=table_name)
+    end_vertex, end_geom = find_nearest_vertex(end_point, table_name=table_name)
 
     if not start_vertex or not end_vertex:
         return None
@@ -162,8 +171,8 @@ def calculate_scenic_route(start_point, end_point, scenic_weight=2.0):
     Custom cost = time_cost - (scenic_rating * scenic_weight * 10)
     Higher scenic_weight means more preference for scenic routes.
     """
-    start_vertex, _ = find_nearest_vertex_v4(start_point)
-    end_vertex, _ = find_nearest_vertex_v4(end_point)
+    start_vertex, _ = find_nearest_vertex(start_point)
+    end_vertex, _ = find_nearest_vertex(end_point)
 
     if not start_vertex or not end_vertex:
         return None
@@ -265,14 +274,14 @@ def _format_route_result(rows):
 # Backward compatibility functions
 def calculate_shortest_path(start_point, end_point, cost_column="cost_time"):
     """Alias for backward compatibility."""
-    return calculate_route_v4(start_point, end_point, cost_column)
+    return calculate_route(start_point, end_point, cost_column)
 
 
 def calculate_fastest_route(start_point, end_point):
     """Calculate fastest route."""
-    return calculate_route_v4(start_point, end_point, 'cost_time')
+    return calculate_route(start_point, end_point, 'cost_time')
 
 
 def calculate_scenic_shortest_route(start_point, end_point):
     """Calculate scenic route."""
-    return calculate_route_v4(start_point, end_point, 'cost_scenic')
+    return calculate_route(start_point, end_point, 'cost_scenic')
