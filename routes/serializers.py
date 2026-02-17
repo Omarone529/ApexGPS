@@ -357,7 +357,12 @@ class RouteCalculationInputSerializer(serializers.Serializer):
         max_length=255,
         help_text="End location (e.g., 'Firenze' or 'Napoli')",
     )
-
+    waypoints = serializers.ListField(
+        child=serializers.CharField(max_length=255),
+        required=False,
+        default=[],
+        help_text="Intermediate waypoints (optional)",
+    )
     vertex_threshold = serializers.FloatField(
         required=False,
         min_value=0.0001,
@@ -380,7 +385,7 @@ class RouteCalculationInputSerializer(serializers.Serializer):
                 return value
             value = str(value).strip()
             if (value.startswith('"') and value.endswith('"')) or (
-                value.startswith("'") and value.endswith("'")
+                    value.startswith("'") and value.endswith("'")
             ):
                 value = value[1:-1]
             return value.strip()
@@ -446,9 +451,9 @@ class RouteCalculationInputSerializer(serializers.Serializer):
                     raise serializers.ValidationError(
                         {
                             field_name: f"Cannot find coordinates for"
-                            f" '{original_name}'. "
-                            f"Please try a different location name"
-                            f" or be more specific."
+                                        f" '{original_name}'. "
+                                        f"Please try a different location name"
+                                        f" or be more specific."
                         }
                     )
 
@@ -479,6 +484,25 @@ class RouteCalculationInputSerializer(serializers.Serializer):
         data["geocoded_end"] = True
         data["end_location_name"] = end_location_name_normalized
 
+        # Geocode waypoints if any
+        waypoints = data.get("waypoints", [])
+        geocoded_waypoints = []
+        for i, wp_name in enumerate(waypoints):
+            if wp_name and wp_name.strip():
+                wp_name_clean = clean_string(wp_name)
+                wp_name_normalized = normalize_location(wp_name_clean)
+                wp_point = geocode_with_fallback(
+                    wp_name_normalized, wp_name_clean, f"waypoints[{i}]"
+                )
+                geocoded_waypoints.append({
+                    "original_name": wp_name_clean,
+                    "name": wp_name_normalized,
+                    "lat": wp_point.y,
+                    "lon": wp_point.x,
+                })
+
+        data["geocoded_waypoints"] = geocoded_waypoints
+
         # Italy bounds check
         ITALY_BOUNDS = {
             "min_lat": 35.0,
@@ -487,22 +511,24 @@ class RouteCalculationInputSerializer(serializers.Serializer):
             "max_lon": 19.0,
         }
 
-        for name, lat, lon in [
-            ("start_location_name", data["start_lat"], data["start_lon"]),
-            ("end_location_name", data["end_lat"], data["end_lon"]),
-        ]:
+        all_points = [(data["start_lat"], data["start_lon"])] + \
+                     [(wp["lat"], wp["lon"]) for wp in geocoded_waypoints] + \
+                     [(data["end_lat"], data["end_lon"])]
+
+        for i, (lat, lon) in enumerate(all_points):
+            point_type = "start" if i == 0 else "end" if i == len(all_points) - 1 else f"waypoint {i}"
             if not (ITALY_BOUNDS["min_lat"] <= lat <= ITALY_BOUNDS["max_lat"]):
                 raise serializers.ValidationError(
                     {
-                        name: f"Latitude {lat} is outside Italy bounds (35° to 47°). "
-                        f"Please choose a location within Italy."
+                        point_type: f"Latitude {lat} is outside Italy bounds (35° to 47°). "
+                                    f"Please choose a location within Italy."
                     }
                 )
             if not (ITALY_BOUNDS["min_lon"] <= lon <= ITALY_BOUNDS["max_lon"]):
                 raise serializers.ValidationError(
                     {
-                        name: f"Longitude {lon} is outside Italy bounds (6° to 19°). "
-                        f"Please choose a location within Italy."
+                        point_type: f"Longitude {lon} is outside Italy bounds (6° to 19°). "
+                                    f"Please choose a location within Italy."
                     }
                 )
 
@@ -522,6 +548,18 @@ class RouteCalculationInputSerializer(serializers.Serializer):
                 "lat": self.validated_data.get("end_lat"),
                 "lon": self.validated_data.get("end_lon"),
             }
+
+            # Add waypoints coordinates
+            geocoded_waypoints = self.validated_data.get("geocoded_waypoints", [])
+            if geocoded_waypoints:
+                data["waypoints"] = [
+                    {
+                        "name": wp["name"],
+                        "original_name": wp["original_name"],
+                        "coordinates": {"lat": wp["lat"], "lon": wp["lon"]}
+                    }
+                    for wp in geocoded_waypoints
+                ]
 
         return data
 
@@ -716,7 +754,18 @@ class RouteSaveFromCalculationSerializer(serializers.Serializer):
             total_scenic_score=calc_data.get("total_scenic_score", 0),
         )
 
+        # Create stops for waypoints if they exist
+        waypoints = calc_data.get("waypoints", [])
+        for i, wp in enumerate(waypoints):
+            Stop.objects.create(
+                route=route,
+                order=i + 1,
+                location=Point(wp["lon"], wp["lat"], srid=4326),
+                name=wp.get("name", f"Tappa {i + 1}"),
+            )
+
         return route
+
 
 class GeocodeSearchResultSerializer(serializers.Serializer):
     """Serializer for geocode search results."""
