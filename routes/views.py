@@ -143,7 +143,7 @@ class RouteViewSet(viewsets.ModelViewSet):
     )
     def calculate_fastest_route(self, request):
         """
-        Calculate fastest route between two locations.
+        Calculate fastest route between two locations with optional waypoints.
         Accepts location names which are automatically geocoded.
         ACCESSIBLE TO ALL USERS (including anonymous).
         """
@@ -171,15 +171,17 @@ class RouteViewSet(viewsets.ModelViewSet):
         start_lon = validated_data["start_lon"]
         end_lat = validated_data["end_lat"]
         end_lon = validated_data["end_lon"]
+        geocoded_waypoints = validated_data.get("geocoded_waypoints", [])
         vertex_threshold = validated_data.get("vertex_threshold", 0.01)
         start_location_name = validated_data["start_location_name"]
         end_location_name = validated_data["end_location_name"]
 
+        # Check straight-line distance for start-end
         lat_diff = abs(start_lat - end_lat) * 111  # 1 grado lat = ~111 km
         lon_diff = abs(start_lon - end_lon) * 111 * 0.6
         straight_distance_km = (lat_diff ** 2 + lon_diff ** 2) ** 0.5
 
-        if straight_distance_km < 1.0:  # Se i punti sono a meno di 1km
+        if straight_distance_km < 1.0 and len(geocoded_waypoints) == 0:
             return Response(
                 {
                     "error": f"I punti di partenza e arrivo sono troppo vicini"
@@ -196,40 +198,94 @@ class RouteViewSet(viewsets.ModelViewSet):
 
         logger.info(
             f"Fastest route request: {start_location_name} to {end_location_name}, "
-            f"distance: {straight_distance_km:.2f} km"
+            f"waypoints: {len(geocoded_waypoints)}"
         )
 
         # Initialize services
         fast_service = FastRoutingService()
         validator = RouteValidator()
 
-        # Validate route request
-        validation_result = validator.full_route_validation(
-            start_lat=start_lat,
-            start_lon=start_lon,
-            end_lat=end_lat,
-            end_lon=end_lon,
-            max_distance_km=1000.0,
-        )
+        # Validate all points
+        all_points = [(start_lat, start_lon)] + \
+                     [(wp["lat"], wp["lon"]) for wp in geocoded_waypoints] + \
+                     [(end_lat, end_lon)]
 
-        if not validation_result["is_valid"]:
-            return Response(
-                {
-                    "error": "Route validation failed",
-                    "details": validation_result,
-                },
-                status=status.HTTP_400_BAD_REQUEST,
+        for i, (lat, lon) in enumerate(all_points):
+            point_type = "start" if i == 0 else "end" if i == len(all_points) - 1 else f"waypoint {i}"
+
+            validation_result = validator.full_route_validation(
+                start_lat=lat,
+                start_lon=lon,
+                end_lat=lat,  # Same point for single-point validation
+                end_lon=lon,
+                max_distance_km=1000.0,
             )
+
+            if not validation_result["is_valid"]:
+                return Response(
+                    {
+                        "error": f"Validation failed for {point_type}",
+                        "details": validation_result,
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         try:
-            # Calculate fastest route using real OSM data
-            fastest_route = fast_service.calculate_fastest_route(
-                start_lat=start_lat,
-                start_lon=start_lon,
-                end_lat=end_lat,
-                end_lon=end_lon,
-                vertex_threshold=vertex_threshold,
-            )
+            # If there are waypoints, calculate multi-segment route
+            if geocoded_waypoints:
+                # Build list of all points in order
+                points = [(start_lat, start_lon)]
+                for wp in geocoded_waypoints:
+                    points.append((wp["lat"], wp["lon"]))
+                points.append((end_lat, end_lon))
+
+                # Calculate each segment
+                all_segments = []
+                total_distance_km = 0
+                total_time_minutes = 0
+                all_polylines = []
+
+                for i in range(len(points) - 1):
+                    segment_result = fast_service.calculate_fastest_route(
+                        start_lat=points[i][0],
+                        start_lon=points[i][1],
+                        end_lat=points[i + 1][0],
+                        end_lon=points[i + 1][1],
+                        vertex_threshold=vertex_threshold,
+                    )
+
+                    if not segment_result:
+                        return Response(
+                            {
+                                "error": f"Could not find route for segment {i + 1} "
+                                         f"({i + 1} of {len(points) - 1})",
+                            },
+                            status=status.HTTP_404_NOT_FOUND,
+                        )
+
+                    all_segments.append(segment_result)
+                    total_distance_km += segment_result.get("total_distance_km", 0)
+                    total_time_minutes += segment_result.get("total_time_minutes", 0)
+                    if segment_result.get("polyline"):
+                        all_polylines.append(segment_result["polyline"])
+
+                # Combine results
+                fastest_route = {
+                    "total_distance_km": total_distance_km,
+                    "total_time_minutes": total_time_minutes,
+                    "segment_count": len(all_segments),
+                    "segments": all_segments,
+                    "polyline": "|".join(all_polylines) if all_polylines else "",
+                }
+            else:
+                # Simple route without waypoints
+                fastest_route = fast_service.calculate_fastest_route(
+                    start_lat=start_lat,
+                    start_lon=start_lon,
+                    end_lat=end_lat,
+                    end_lon=end_lon,
+                    vertex_threshold=vertex_threshold,
+                )
 
             if not fastest_route:
                 return Response(
@@ -238,7 +294,6 @@ class RouteViewSet(viewsets.ModelViewSet):
                                  "1) Points are too close to each other\n"
                                  "2) Road network not available in the area\n"
                                  "3) Database connection issues",
-                        "validation": validation_result,
                         "distance_km": round(straight_distance_km, 2),
                     },
                     status=status.HTTP_404_NOT_FOUND,
@@ -278,15 +333,31 @@ class RouteViewSet(viewsets.ModelViewSet):
                 "original_name": end_location_name,
             }
 
+            waypoints_data = []
+            for i, wp in enumerate(geocoded_waypoints):
+                waypoints_data.append({
+                    "order": i + 1,
+                    "name": wp["name"],
+                    "original_name": wp["original_name"],
+                    "lat": wp["lat"],
+                    "lon": wp["lon"],
+                    "geocoded": True,
+                })
+
             processing_time = time.time() - start_time
             response_data = _prepare_route_response(
                 fastest_route=fastest_route,
                 start_data=start_data,
                 end_data=end_data,
-                validation_result=validation_result,
+                validation_result={"is_valid": True, "warnings": []},
                 processing_time=processing_time,
             )
 
+            # Add waypoints to response
+            response_data["waypoints"] = waypoints_data
+            response_data["has_waypoints"] = len(waypoints_data) > 0
+
+            # Distance info
             response_data["distance_info"] = {
                 "straight_line_km": round(straight_distance_km, 2),
                 "route_km": route_distance_km,
@@ -307,6 +378,10 @@ class RouteViewSet(viewsets.ModelViewSet):
                 response_data["calculation_data"] = {
                     "start_location": {"lat": start_lat, "lon": start_lon},
                     "end_location": {"lat": end_lat, "lon": end_lon},
+                    "waypoints": [
+                        {"lat": wp["lat"], "lon": wp["lon"], "name": wp["name"]}
+                        for wp in geocoded_waypoints
+                    ],
                     "preference": "fast",
                     "total_distance_km": fastest_route.get("total_distance_km", 0),
                     "total_time_minutes": fastest_route.get("total_time_minutes", 0),
@@ -316,7 +391,8 @@ class RouteViewSet(viewsets.ModelViewSet):
 
             logger.info(
                 f"Fastest route calculated successfully: {route_distance_km:.2f} km, "
-                f"{fastest_route.get('total_time_minutes', 0):.1f} min"
+                f"{fastest_route.get('total_time_minutes', 0):.1f} min, "
+                f"waypoints: {len(waypoints_data)}"
             )
 
             return Response(response_data, status=status.HTTP_200_OK)
@@ -325,7 +401,6 @@ class RouteViewSet(viewsets.ModelViewSet):
             return Response(
                 {
                     "error": f"Invalid input: {str(e)}",
-                    "validation": validation_result,
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -337,8 +412,6 @@ class RouteViewSet(viewsets.ModelViewSet):
             return Response(
                 {
                     "error": f"Error calculating fastest route: {str(e)}",
-                    "validation": validation_result,
-                    "distance_km": round(straight_distance_km, 2),
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
@@ -945,7 +1018,7 @@ def geocode_search(request):
 
     try:
         from .services.geocoding import GeocodingService
-        from .serializers import GeocodeSearchResultSerializer  # <-- IMPORT
+        from .serializers import GeocodeSearchResultSerializer
 
         base_url = GeocodingService._get_nominatim_url()
 
