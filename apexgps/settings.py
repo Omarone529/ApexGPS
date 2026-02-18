@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "django.contrib.gis",
     "django_filters",
+    "drf_spectacular",
     # OAuth apps
     "social_django",
     # Local apps
@@ -158,6 +159,7 @@ REST_FRAMEWORK = {
         "rest_framework.authentication.SessionAuthentication",
         "rest_framework.authentication.BasicAuthentication",
     ],
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
 
 # OAuth Settings
@@ -228,3 +230,11 @@ CORS_ALLOW_HEADERS = [
     "x-csrftoken",
     "x-requested-with",
 ]
+
+#drf settings
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'La mia API',
+    'DESCRIPTION': 'Descrizione della mia API',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+}
