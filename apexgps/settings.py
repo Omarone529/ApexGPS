@@ -233,8 +233,16 @@ CORS_ALLOW_HEADERS = [
 
 #drf settings
 SPECTACULAR_SETTINGS = {
-    'TITLE': 'La mia API',
-    'DESCRIPTION': 'Descrizione della mia API',
-    'VERSION': '1.0.0',
+    'TITLE': 'APEXGPS backends API',
+    'DESCRIPTION': """
+    DEM ( digital elevetion model ) : dati 3D della superficie e per le altitudini della zona d'interesse.
+    GEOCODE : Ricerca della località per nome.
+    GIS : API per punti di interesse ( POIS ) e per le scenics area.
+    POIS : foto dei punti di interesse.
+    ROUTES : API per strade e per il calcolo del percorso.
+    STOPS : CRUD per creazione tappe.
+    USERS: Gestione utenti e autenticazioni.
+    """,
+
     'SERVE_INCLUDE_SCHEMA': False,
 }
