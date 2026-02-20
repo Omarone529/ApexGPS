@@ -17,7 +17,8 @@ __all__ = [
     "RouteCalculationResultSerializer",
     "RouteCalculationResponseSerializer",
     "RouteSaveFromCalculationSerializer",
-    "GeocodeSearchResultSerializer"
+    "GeocodeSearchResultSerializer",
+    "POIPhotoResponseSerializer"
 ]
 
 
