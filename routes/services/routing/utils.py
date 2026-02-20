@@ -35,6 +35,7 @@ __all__ = [
     "_fetch_wikimedia_geosearch",
     "_fetch_pic4carto",
     "_fetch_wikipedia_description",
+    "_fetch_wikipedia_image"
 ]
 
 
@@ -674,9 +675,62 @@ def _is_relevant_photo(title, description=""):
     return True
 
 
+def _fetch_wikipedia_image(name, wikipedia_url, headers):
+    """
+    Fetch the main image from the Wikipedia page matching the given name.
+    Returns a photo dict or None.
+    """
+    if not name:
+        return None
+
+    # Search for the page by name
+    params_search = {
+        "action": "query",
+        "format": "json",
+        "list": "search",
+        "srsearch": name,
+        "srlimit": 1
+    }
+    try:
+        resp = requests.get(wikipedia_url, params=params_search, headers=headers, timeout=5)
+        data = resp.json()
+        search_results = data.get("query", {}).get("search", [])
+        if not search_results:
+            return None
+
+        page_title = search_results[0]["title"]
+
+        # Get page image
+        params_image = {
+            "action": "query",
+            "format": "json",
+            "titles": page_title,
+            "prop": "pageimages",
+            "pithumbsize": 400
+        }
+        img_resp = requests.get(wikipedia_url, params=params_image, headers=headers, timeout=5)
+        img_data = img_resp.json()
+        pages = img_data.get("query", {}).get("pages", {})
+        for page in pages.values():
+            if page.get("thumbnail"):
+                return {
+                    "id": f"wiki_{page['pageid']}",
+                    "url": page["thumbnail"]["source"],
+                    "thumbnail": page["thumbnail"]["source"],
+                    "date": "",
+                    "source": "Wikipedia"
+                }
+    except Exception as e:
+        logger.error(f"Wikipedia image fetch error: {e}")
+    return None
+
+
 def _fetch_wikimedia_geosearch(lat, lon, wikimedia_url, headers):
-    """Fetch photos from Wikimedia Commons via geosearch."""
-    local_photos = []
+    """
+    Fetch photos from Wikimedia Commons using geosearch around the given coordinates.
+    Returns a list of photo dicts.
+    """
+    photos = []
     params_geo = {
         "action": "query",
         "format": "json",
@@ -687,11 +741,12 @@ def _fetch_wikimedia_geosearch(lat, lon, wikimedia_url, headers):
         "gsnamespace": "6"
     }
     try:
-        geo_response = requests.get(wikimedia_url, params=params_geo, headers=headers, timeout=8)
-        geo_data = geo_response.json()
+        geo_resp = requests.get(wikimedia_url, params=params_geo, headers=headers, timeout=8)
+        geo_data = geo_resp.json()
 
         if "query" in geo_data and "geosearch" in geo_data["query"]:
             items = geo_data["query"]["geosearch"]
+
             # Fetch details in parallel
             with ThreadPoolExecutor(max_workers=5) as executor:
                 future_to_item = {}
@@ -705,6 +760,7 @@ def _fetch_wikimedia_geosearch(lat, lon, wikimedia_url, headers):
                         "titles": f"File:{title}",
                         "prop": "imageinfo|categories",
                         "iiprop": "url|extmetadata",
+                        "iiurlwidth": 400,
                         "cllimit": 10
                     }
                     future = executor.submit(requests.get, wikimedia_url, params=params_info, headers=headers, timeout=8)
@@ -713,8 +769,8 @@ def _fetch_wikimedia_geosearch(lat, lon, wikimedia_url, headers):
                 for future in as_completed(future_to_item):
                     item, title = future_to_item[future]
                     try:
-                        info_response = future.result()
-                        info_data = info_response.json()
+                        info_resp = future.result()
+                        info_data = info_resp.json()
                         pages = info_data.get("query", {}).get("pages", {})
                         for page_id, page_info in pages.items():
                             if page_id == "-1":
@@ -740,7 +796,7 @@ def _fetch_wikimedia_geosearch(lat, lon, wikimedia_url, headers):
                                 elif len(date) > 10:
                                     date = date[:10]
 
-                            local_photos.append({
+                            photos.append({
                                 "id": item.get("pageid"),
                                 "url": image_data.get("url"),
                                 "thumbnail": image_data.get("thumburl", image_data.get("url")),
@@ -751,12 +807,15 @@ def _fetch_wikimedia_geosearch(lat, lon, wikimedia_url, headers):
                         logger.error(f"Wikimedia detail fetch error for {title}: {e}")
     except Exception as e:
         logger.error(f"Wikimedia geosearch error: {e}")
-    return local_photos
+    return photos
 
 
 def _fetch_pic4carto(lat, lon, pic4carto_url, headers):
-    """Fetch photos from Pic4Carto aggregator."""
-    local_photos = []
+    """
+    Fetch photos from Pic4Carto aggregator (Mapillary, Flickr, etc.).
+    Returns a list of photo dicts.
+    """
+    photos = []
     params_pic = {
         "lat": lat,
         "lng": lon,
@@ -764,9 +823,9 @@ def _fetch_pic4carto(lat, lon, pic4carto_url, headers):
         "limit": 10
     }
     try:
-        pic_response = requests.get(pic4carto_url, params=params_pic, timeout=5)
-        if pic_response.ok:
-            data = pic_response.json()
+        resp = requests.get(pic4carto_url, params=params_pic, timeout=5)
+        if resp.ok:
+            data = resp.json()
             for item in data:
                 title = item.get("title", "")
                 description = item.get("description", "")
@@ -775,7 +834,7 @@ def _fetch_pic4carto(lat, lon, pic4carto_url, headers):
                 date_taken = item.get("date_taken", "")
                 if date_taken and "T" in date_taken:
                     date_taken = date_taken.split("T")[0]
-                local_photos.append({
+                photos.append({
                     "id": item.get("id"),
                     "url": item.get("url"),
                     "thumbnail": item.get("thumbnail_url", item.get("url")),
@@ -783,13 +842,15 @@ def _fetch_pic4carto(lat, lon, pic4carto_url, headers):
                     "source": item.get("provider", "Pic4Carto")
                 })
     except Exception as e:
-        logger.error(f"Pic4Carto error: {e}")
-    return local_photos
+        logger.warning(f"Pic4Carto error: {e}")  # warning, not error, to avoid noise
+    return photos
 
 
 def _fetch_wikipedia_description(lat, lon, name, wikipedia_url, headers):
-    """Fetch a short Wikipedia description (first by name, then by geosearch)."""
-
+    """
+    Fetch a short Wikipedia description for the location.
+    Tries by name first, then falls back to geosearch.
+    """
     if name:
         params_search = {
             "action": "query",
@@ -824,7 +885,7 @@ def _fetch_wikipedia_description(lat, lon, name, wikipedia_url, headers):
 
     # Fallback to geosearch
     try:
-        params_wiki = {
+        params_geo = {
             "action": "query",
             "format": "json",
             "list": "geosearch",
@@ -832,11 +893,11 @@ def _fetch_wikipedia_description(lat, lon, name, wikipedia_url, headers):
             "gsradius": "500",
             "gslimit": "1"
         }
-        wiki_response = requests.get(wikipedia_url, params=params_wiki, headers=headers, timeout=5)
-        wiki_data = wiki_response.json()
+        geo_resp = requests.get(wikipedia_url, params=params_geo, headers=headers, timeout=5)
+        geo_data = geo_resp.json()
 
-        if "query" in wiki_data and "geosearch" in wiki_data["query"]:
-            for item in wiki_data["query"]["geosearch"]:
+        if "query" in geo_data and "geosearch" in geo_data["query"]:
+            for item in geo_data["query"]["geosearch"]:
                 page_title = item["title"]
                 params_extract = {
                     "action": "query",
@@ -847,8 +908,8 @@ def _fetch_wikipedia_description(lat, lon, name, wikipedia_url, headers):
                     "explaintext": True,
                     "exsentences": 2
                 }
-                extract_response = requests.get(wikipedia_url, params=params_extract, headers=headers, timeout=5)
-                extract_data = extract_response.json()
+                extract_resp = requests.get(wikipedia_url, params=params_extract, headers=headers, timeout=5)
+                extract_data = extract_resp.json()
                 pages = extract_data.get("query", {}).get("pages", {})
                 for page in pages.values():
                     if page.get("pageid", -1) != -1:

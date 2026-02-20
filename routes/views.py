@@ -1,7 +1,7 @@
 import os
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from django.core.cache import cache
 
@@ -16,7 +16,7 @@ from rest_framework.response import Response
 
 from gis_data.services.topology_service import logger
 from routes.services.routing.utils import _prepare_route_response, _fetch_pic4carto, _fetch_wikipedia_description, \
-    _fetch_wikimedia_geosearch
+    _fetch_wikimedia_geosearch, _fetch_wikipedia_image
 
 from .models import Route, Stop
 from .permissions import IsOwnerOrReadOnly
@@ -1089,8 +1089,10 @@ def geocode_search(request):
 @permission_classes([AllowAny])
 def poi_photos(request):
     """
-    Get photos for a POI from multiple sources.
-    Optimized with caching, parallel requests, and improved filtering.
+    Get photos for a POI from multiple sources with intelligent prioritization:
+    1. Main image from Wikipedia page if available
+    2. Geosearch from Wikimedia Commons
+    3. Pic4Carto as fallback
     """
     try:
         name = request.GET.get('name', '')
@@ -1110,54 +1112,58 @@ def poi_photos(request):
 
         logger.info(f"Searching photos for {name} at {lat}, {lon}")
 
+        # Read environment variables
         wikimedia_url = os.environ.get('WIKIMEDIA_API_URL')
         wikipedia_url = os.environ.get('WIKIPEDIA_API_URL')
         pic4carto_base = os.environ.get('PIC4CARTO_API_URL')
-        pic4carto_url = f"{pic4carto_base}/search/around"
         user_agent = os.environ.get('API_USER_AGENT', 'ApexGPS/1.0 (https://apexgps.com)')
-
         headers = {'User-Agent': user_agent}
+
         photos = []
+        wikipedia_description = ""
 
-        # Perform the three main calls in parallel
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            future_wikimedia = executor.submit(
-                _fetch_wikimedia_geosearch, lat, lon, wikimedia_url, headers
-            )
-            future_wikipedia = executor.submit(
-                _fetch_wikipedia_description, lat, lon, name, wikipedia_url, headers
-            )
-            future_pic4carto = executor.submit(
-                _fetch_pic4carto, lat, lon, pic4carto_url, headers
-            )
+        # Fetch main image from Wikipedia
+        if wikipedia_url and name:
+            wiki_image = _fetch_wikipedia_image(name, wikipedia_url, headers)
+            if wiki_image:
+                photos.append(wiki_image)
+                logger.info(f"Found Wikipedia image for {name}")
 
-            wikimedia_photos = future_wikimedia.result()
-            photos.extend(wikimedia_photos)
+        # Geosearch from Wikimedia Commons
+        if len(photos) < 3 and wikimedia_url:
+            wikimedia_photos = _fetch_wikimedia_geosearch(lat, lon, wikimedia_url, headers)
+            # Avoid duplicates with any existing Wikipedia image
+            existing_urls = {p['url'] for p in photos}
+            for p in wikimedia_photos:
+                if p['url'] not in existing_urls:
+                    photos.append(p)
+                    existing_urls.add(p['url'])
+            logger.info(f"Added {len(wikimedia_photos)} Wikimedia photos")
 
-            if len(photos) < 3:
-                pic4carto_photos = future_pic4carto.result()
-                existing_urls = {p['url'] for p in photos}
-                for p in pic4carto_photos:
-                    if p['url'] not in existing_urls:
-                        photos.append(p)
-                        existing_urls.add(p['url'])
+        # Pic4Carto
+        if len(photos) < 3 and pic4carto_base:
+            pic4carto_url = f"{pic4carto_base}/search/around"
+            pic4carto_photos = _fetch_pic4carto(lat, lon, pic4carto_url, headers)
+            existing_urls = {p['url'] for p in photos}
+            for p in pic4carto_photos:
+                if p['url'] not in existing_urls:
+                    photos.append(p)
+                    existing_urls.add(p['url'])
+            logger.info(f"Added {len(pic4carto_photos)} Pic4Carto photos")
 
-            wikipedia_description = future_wikipedia.result()
+        # Fetch Wikipedia description (always useful, even without photos)
+        if wikipedia_url and name:
+            wikipedia_description = _fetch_wikipedia_description(lat, lon, name, wikipedia_url, headers)
 
-        unique_photos = []
-        seen_urls = set()
-        for p in photos:
-            if p['url'] not in seen_urls:
-                seen_urls.add(p['url'])
-                unique_photos.append(p)
+        # Limit to 5 photos
+        photos = photos[:5]
 
-        logger.info(f"Found {len(unique_photos)} relevant photos for {name} after filtering")
+        logger.info(f"Total photos found: {len(photos)} for {name}")
 
         response_data = {
-            "photos": unique_photos[:5],
+            "photos": photos,
             "wikipedia_description": wikipedia_description
         }
-
         cache.set(cache_key, response_data, timeout=86400)
 
         serializer = POIPhotoResponseSerializer(response_data)
