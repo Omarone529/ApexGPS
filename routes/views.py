@@ -1151,7 +1151,7 @@ def poi_photos(request):
                     existing_urls.add(p['url'])
             logger.info(f"Added {len(pic4carto_photos)} Pic4Carto photos")
 
-        # Fetch Wikipedia description (always useful, even without photos)
+        # Fetch Wikipedia description
         if wikipedia_url and name:
             wikipedia_description = _fetch_wikipedia_description(lat, lon, name, wikipedia_url, headers)
 
