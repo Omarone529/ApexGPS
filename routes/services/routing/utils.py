@@ -28,6 +28,7 @@ __all__ = [
     "_calculate_total_route_length",
     "_calculate_secondary_road_length",
     "_get_secondary_road_percentage",
+    "_prepare_route_response"
 ]
 
 
