@@ -1,8 +1,10 @@
-import logging
-
-import polyline
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from django.contrib.gis.geos import LineString, Point
 from django.db import connection
+import logging
+import polyline
+import re
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +30,12 @@ __all__ = [
     "_calculate_total_route_length",
     "_calculate_secondary_road_length",
     "_get_secondary_road_percentage",
-    "_prepare_route_response"
+    "_prepare_route_response",
+    "_is_relevant_photo",
+    "_fetch_wikimedia_geosearch",
+    "_fetch_pic4carto",
+    "_fetch_wikipedia_description",
+    "_fetch_wikipedia_image"
 ]
 
 
@@ -631,3 +638,282 @@ def _get_secondary_road_percentage(segments: list[dict]) -> float:
         return 0.0
 
     return (secondary_length / total_length) * 100
+
+# Regex for fast filtering
+EXCLUDE_PATTERNS = re.compile(
+    r'portrait|ritratto|selfie|foto di gruppo|person|persona|people|gente|'
+    r'uomo|donna|man|woman|child|bambino|family|famiglia|viso|face|profile|'
+    r'profilo|autoritratto|wedding|matrimonio|party|festa|group|gruppo|'
+    r'tourist|turista|visitor|visitatore|crowd|folla|ritratto fotografico|'
+    r'photographic portrait|headshot',
+    re.IGNORECASE
+)
+
+PLACE_PATTERNS = re.compile(
+    r'church|chiesa|cathedral|duomo|basilica|castle|castello|fortress|fortezza|'
+    r'monument|monumento|statua|statue|museum|museo|gallery|galleria|view|vista|'
+    r'panorama|panoramic|lake|lago|river|fiume|waterfall|cascata|mountain|montagna|'
+    r'hill|colle|pass|passo|vineyard|vigneto|wine|vino|square|piazza|street|via|'
+    r'road|strada|building|edificio|palace|palazzo|park|parco|garden|giardino|'
+    r'bridge|ponte|tower|torre|ruins|rovine|archaeological|archeologico|fountain|'
+    r'fontana|well|pozzo|coast|costa|sea|mare|beach|spiaggia|valley|valle|cliff|'
+    r'scogliera|restaurant|ristorante|trattoria|osteria|taverna|locanda|food|cibo|'
+    r'pizza|pizzeria|eating|mangiare|cafe|caffè|coffee|bar|pub|brewery|birreria|'
+    r'wine bar|enoteca|gelateria|ice cream|pastry|pasticceria|bakery|forno|meal|'
+    r'pranzo|cena|dinner|lunch',
+    re.IGNORECASE
+)
+
+
+def _is_relevant_photo(title, description=""):
+    """Return True if photo is location-appropriate (not a portrait)."""
+    text = f"{title} {description}".lower()
+    if EXCLUDE_PATTERNS.search(text):
+        return False
+    if PLACE_PATTERNS.search(text):
+        return True
+    return True
+
+
+def _fetch_wikipedia_image(name, wikipedia_url, headers):
+    """
+    Fetch the main image from the Wikipedia page matching the given name.
+    Returns a photo dict or None.
+    """
+    if not name:
+        return None
+
+    # Search for the page by name
+    params_search = {
+        "action": "query",
+        "format": "json",
+        "list": "search",
+        "srsearch": name,
+        "srlimit": 1
+    }
+    try:
+        resp = requests.get(wikipedia_url, params=params_search, headers=headers, timeout=5)
+        data = resp.json()
+        search_results = data.get("query", {}).get("search", [])
+        if not search_results:
+            return None
+
+        page_title = search_results[0]["title"]
+
+        # Get page image
+        params_image = {
+            "action": "query",
+            "format": "json",
+            "titles": page_title,
+            "prop": "pageimages",
+            "pithumbsize": 400
+        }
+        img_resp = requests.get(wikipedia_url, params=params_image, headers=headers, timeout=5)
+        img_data = img_resp.json()
+        pages = img_data.get("query", {}).get("pages", {})
+        for page in pages.values():
+            if page.get("thumbnail"):
+                return {
+                    "id": f"wiki_{page['pageid']}",
+                    "url": page["thumbnail"]["source"],
+                    "thumbnail": page["thumbnail"]["source"],
+                    "date": "",
+                    "source": "Wikipedia"
+                }
+    except Exception as e:
+        logger.error(f"Wikipedia image fetch error: {e}")
+    return None
+
+
+def _fetch_wikimedia_geosearch(lat, lon, wikimedia_url, headers):
+    """
+    Fetch photos from Wikimedia Commons using geosearch around the given coordinates.
+    Returns a list of photo dicts.
+    """
+    photos = []
+    params_geo = {
+        "action": "query",
+        "format": "json",
+        "list": "geosearch",
+        "gscoord": f"{lat}|{lon}",
+        "gsradius": "200",
+        "gslimit": "10",
+        "gsnamespace": "6"
+    }
+    try:
+        geo_resp = requests.get(wikimedia_url, params=params_geo, headers=headers, timeout=8)
+        geo_data = geo_resp.json()
+
+        if "query" in geo_data and "geosearch" in geo_data["query"]:
+            items = geo_data["query"]["geosearch"]
+
+            # Fetch details in parallel
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                future_to_item = {}
+                for item in items:
+                    title = item["title"]
+                    if title.startswith("File:"):
+                        title = title[5:]
+                    params_info = {
+                        "action": "query",
+                        "format": "json",
+                        "titles": f"File:{title}",
+                        "prop": "imageinfo|categories",
+                        "iiprop": "url|extmetadata",
+                        "iiurlwidth": 400,
+                        "cllimit": 10
+                    }
+                    future = executor.submit(requests.get, wikimedia_url, params=params_info, headers=headers, timeout=8)
+                    future_to_item[future] = (item, title)
+
+                for future in as_completed(future_to_item):
+                    item, title = future_to_item[future]
+                    try:
+                        info_resp = future.result()
+                        info_data = info_resp.json()
+                        pages = info_data.get("query", {}).get("pages", {})
+                        for page_id, page_info in pages.items():
+                            if page_id == "-1":
+                                continue
+                            imageinfo = page_info.get("imageinfo", [])
+                            if not imageinfo:
+                                continue
+                            categories = page_info.get("categories", [])
+                            category_text = " ".join([cat.get("title", "") for cat in categories])
+                            image_data = imageinfo[0]
+                            extmetadata = image_data.get("extmetadata", {})
+                            description = extmetadata.get("ImageDescription", {}).get("value", "")
+
+                            if not _is_relevant_photo(title, description + " " + category_text):
+                                continue
+
+                            date = extmetadata.get("DateTimeOriginal", {}).get("value", "")
+                            if not date:
+                                date = extmetadata.get("DateTime", {}).get("value", "")
+                            if date:
+                                if "T" in date:
+                                    date = date.split("T")[0]
+                                elif len(date) > 10:
+                                    date = date[:10]
+
+                            photos.append({
+                                "id": item.get("pageid"),
+                                "url": image_data.get("url"),
+                                "thumbnail": image_data.get("thumburl", image_data.get("url")),
+                                "date": date,
+                                "source": "Wikimedia Commons"
+                            })
+                    except Exception as e:
+                        logger.error(f"Wikimedia detail fetch error for {title}: {e}")
+    except Exception as e:
+        logger.error(f"Wikimedia geosearch error: {e}")
+    return photos
+
+
+def _fetch_pic4carto(lat, lon, pic4carto_url, headers):
+    """
+    Fetch photos from Pic4Carto aggregator (Mapillary, Flickr, etc.).
+    Returns a list of photo dicts.
+    """
+    photos = []
+    params_pic = {
+        "lat": lat,
+        "lng": lon,
+        "radius": 200,
+        "limit": 10
+    }
+    try:
+        resp = requests.get(pic4carto_url, params=params_pic, timeout=5)
+        if resp.ok:
+            data = resp.json()
+            for item in data:
+                title = item.get("title", "")
+                description = item.get("description", "")
+                if not _is_relevant_photo(title, description):
+                    continue
+                date_taken = item.get("date_taken", "")
+                if date_taken and "T" in date_taken:
+                    date_taken = date_taken.split("T")[0]
+                photos.append({
+                    "id": item.get("id"),
+                    "url": item.get("url"),
+                    "thumbnail": item.get("thumbnail_url", item.get("url")),
+                    "date": date_taken,
+                    "source": item.get("provider", "Pic4Carto")
+                })
+    except Exception as e:
+        logger.warning(f"Pic4Carto error: {e}")  # warning, not error, to avoid noise
+    return photos
+
+
+def _fetch_wikipedia_description(lat, lon, name, wikipedia_url, headers):
+    """
+    Fetch a short Wikipedia description for the location.
+    Tries by name first, then falls back to geosearch.
+    """
+    if name:
+        params_search = {
+            "action": "query",
+            "format": "json",
+            "list": "search",
+            "srsearch": name,
+            "srlimit": 1
+        }
+        try:
+            search_resp = requests.get(wikipedia_url, params=params_search, headers=headers, timeout=5)
+            search_data = search_resp.json()
+            search_results = search_data.get("query", {}).get("search", [])
+            if search_results:
+                page_title = search_results[0]["title"]
+                params_extract = {
+                    "action": "query",
+                    "format": "json",
+                    "titles": page_title,
+                    "prop": "extracts",
+                    "exintro": True,
+                    "explaintext": True,
+                    "exsentences": 2
+                }
+                extract_resp = requests.get(wikipedia_url, params=params_extract, headers=headers, timeout=5)
+                extract_data = extract_resp.json()
+                pages = extract_data.get("query", {}).get("pages", {})
+                for page in pages.values():
+                    if page.get("pageid", -1) != -1:
+                        return page.get("extract", "")
+        except Exception as e:
+            logger.error(f"Wikipedia name search error: {e}")
+
+    # Fallback to geosearch
+    try:
+        params_geo = {
+            "action": "query",
+            "format": "json",
+            "list": "geosearch",
+            "gscoord": f"{lat}|{lon}",
+            "gsradius": "500",
+            "gslimit": "1"
+        }
+        geo_resp = requests.get(wikipedia_url, params=params_geo, headers=headers, timeout=5)
+        geo_data = geo_resp.json()
+
+        if "query" in geo_data and "geosearch" in geo_data["query"]:
+            for item in geo_data["query"]["geosearch"]:
+                page_title = item["title"]
+                params_extract = {
+                    "action": "query",
+                    "format": "json",
+                    "titles": page_title,
+                    "prop": "extracts",
+                    "exintro": True,
+                    "explaintext": True,
+                    "exsentences": 2
+                }
+                extract_resp = requests.get(wikipedia_url, params=params_extract, headers=headers, timeout=5)
+                extract_data = extract_resp.json()
+                pages = extract_data.get("query", {}).get("pages", {})
+                for page in pages.values():
+                    if page.get("pageid", -1) != -1:
+                        return page.get("extract", "")
+    except Exception as e:
+        logger.error(f"Wikipedia geosearch error: {e}")
+    return ""
