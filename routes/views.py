@@ -1,5 +1,10 @@
 import os
+import re
 import time
+from concurrent.futures import ThreadPoolExecutor
+
+from django.core.cache import cache
+
 import requests
 from django.contrib.gis.geos import Point
 from django.db import models
@@ -10,7 +15,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from gis_data.services.topology_service import logger
-from routes.services.routing.utils import _prepare_route_response
+from routes.services.routing.utils import _prepare_route_response, _fetch_pic4carto, _fetch_wikipedia_description, \
+    _fetch_wikimedia_geosearch
 
 from .models import Route, Stop
 from .permissions import IsOwnerOrReadOnly
@@ -1084,316 +1090,66 @@ def geocode_search(request):
 def poi_photos(request):
     """
     Get photos for a POI from multiple sources.
-    Filters out portraits/people photos, keeps only location-appropriate images.
+    Optimized with caching, parallel requests, and improved filtering.
     """
     try:
         name = request.GET.get('name', '')
         lat = request.GET.get('lat')
         lon = request.GET.get('lon')
-        category = request.GET.get('category', '')
 
         if not lat or not lon:
             logger.warning(f"Missing coordinates for {name}")
             return Response({"photos": [], "wikipedia_description": ""})
 
+        # Cache key based on rounded coordinates
+        cache_key = f"poi_photos_{float(lat):.5f}_{float(lon):.5f}"
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            logger.info(f"Cache hit for {cache_key}")
+            return Response(cached_data)
+
         logger.info(f"Searching photos for {name} at {lat}, {lon}")
 
-        # Environment variables
-        wikimedia_url = os.environ.get('WIKIMEDIA_API_URL', 'https://commons.wikimedia.org/w/api.php')
-        wikipedia_url = os.environ.get('WIKIPEDIA_API_URL', 'https://it.wikipedia.org/w/api.php')
-        pic4carto_base = os.environ.get('PIC4CARTO_API_URL', 'https://api-pic4carto.openstreetmap.fr')
+        wikimedia_url = os.environ.get('WIKIMEDIA_API_URL')
+        wikipedia_url = os.environ.get('WIKIPEDIA_API_URL')
+        pic4carto_base = os.environ.get('PIC4CARTO_API_URL')
         pic4carto_url = f"{pic4carto_base}/search/around"
         user_agent = os.environ.get('API_USER_AGENT', 'ApexGPS/1.0 (https://apexgps.com)')
 
         headers = {'User-Agent': user_agent}
         photos = []
 
-        # Keywords to exclude portraits and people photos
-        exclude_keywords = [
-            'portrait', 'ritratto', 'selfie', 'foto di gruppo',
-            'person', 'persona', 'people', 'gente', 'uomo', 'donna',
-            'man', 'woman', 'child', 'bambino', 'family', 'famiglia',
-            'viso', 'face', 'profile', 'profilo', 'autoritratto',
-            'wedding', 'matrimonio', 'party', 'festa', 'group', 'gruppo',
-            'tourist', 'turista', 'visitor', 'visitatore', 'crowd', 'folla',
-            'ritratto fotografico', 'photographic portrait', 'headshot'
-        ]
+        # Perform the three main calls in parallel
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            future_wikimedia = executor.submit(
+                _fetch_wikimedia_geosearch, lat, lon, wikimedia_url, headers
+            )
+            future_wikipedia = executor.submit(
+                _fetch_wikipedia_description, lat, lon, name, wikipedia_url, headers
+            )
+            future_pic4carto = executor.submit(
+                _fetch_pic4carto, lat, lon, pic4carto_url, headers
+            )
 
-        # Keywords to include location-appropriate photos
-        place_keywords = [
-            'church', 'chiesa', 'cathedral', 'duomo', 'basilica',
-            'castle', 'castello', 'fortress', 'fortezza',
-            'monument', 'monumento', 'statua', 'statue',
-            'museum', 'museo', 'gallery', 'galleria',
-            'view', 'vista', 'panorama', 'panoramic',
-            'lake', 'lago', 'river', 'fiume', 'waterfall', 'cascata',
-            'mountain', 'montagna', 'hill', 'colle', 'pass', 'passo',
-            'vineyard', 'vigneto', 'wine', 'vino',
-            'square', 'piazza', 'street', 'via', 'road', 'strada',
-            'building', 'edificio', 'palace', 'palazzo',
-            'park', 'parco', 'garden', 'giardino',
-            'bridge', 'ponte', 'tower', 'torre',
-            'ruins', 'rovine', 'archaeological', 'archeologico',
-            'fountain', 'fontana', 'well', 'pozzo',
-            'coast', 'costa', 'sea', 'mare', 'beach', 'spiaggia',
-            'valley', 'valle', 'cliff', 'scogliera',
-            'restaurant', 'ristorante', 'trattoria', 'osteria', 'taverna', 'locanda',
-            'food', 'cibo', 'pizza', 'pizzeria', 'eating', 'mangiare',
-            'cafe', 'caffè', 'coffee', 'bar', 'pub', 'brewery', 'birreria',
-            'wine bar', 'enoteca', 'gelateria', 'ice cream', 'pastry', 'pasticceria',
-            'bakery', 'forno', 'meal', 'pranzo', 'cena', 'dinner', 'lunch',
-        ]
+            wikimedia_photos = future_wikimedia.result()
+            photos.extend(wikimedia_photos)
 
-        def is_relevant_photo(title, description=""):
-            """Check if photo is location-appropriate (not a portrait)."""
-            text = f"{title} {description}".lower()
+            if len(photos) < 3:
+                pic4carto_photos = future_pic4carto.result()
+                existing_urls = {p['url'] for p in photos}
+                for p in pic4carto_photos:
+                    if p['url'] not in existing_urls:
+                        photos.append(p)
+                        existing_urls.add(p['url'])
 
-            for keyword in exclude_keywords:
-                if keyword in text:
-                    return False
+            wikipedia_description = future_wikipedia.result()
 
-            for keyword in place_keywords:
-                if keyword in text:
-                    return True
-
-            return True
-
-        # Wikimedia Commons geosearch (most accurate)
-        params_geo = {
-            "action": "query",
-            "format": "json",
-            "list": "geosearch",
-            "gscoord": f"{lat}|{lon}",
-            "gsradius": "200",
-            "gslimit": "10",
-            "gsnamespace": "6"
-        }
-
-        try:
-            geo_response = requests.get(wikimedia_url, params=params_geo, headers=headers, timeout=10)
-            geo_data = geo_response.json()
-
-            if "query" in geo_data and "geosearch" in geo_data["query"]:
-                for item in geo_data["query"]["geosearch"]:
-                    title = item["title"]
-                    if title.startswith("File:"):
-                        title = title[5:]
-
-                    params_info = {
-                        "action": "query",
-                        "format": "json",
-                        "titles": f"File:{title}",
-                        "prop": "imageinfo|categories",
-                        "iiprop": "url|extmetadata",
-                        "cllimit": 10
-                    }
-
-                    info_response = requests.get(wikimedia_url, params=params_info, headers=headers, timeout=10)
-                    info_data = info_response.json()
-
-                    pages = info_data.get("query", {}).get("pages", {})
-                    for page_id, page_info in pages.items():
-                        if page_id != "-1":
-                            imageinfo = page_info.get("imageinfo", [])
-                            categories = page_info.get("categories", [])
-                            category_text = " ".join([cat.get("title", "") for cat in categories])
-
-                            if imageinfo:
-                                image_data = imageinfo[0]
-                                extmetadata = image_data.get("extmetadata", {})
-                                description = extmetadata.get("ImageDescription", {}).get("value", "")
-
-                                if not is_relevant_photo(title, description + " " + category_text):
-                                    continue
-
-                                date = extmetadata.get("DateTimeOriginal", {}).get("value", "")
-                                if not date:
-                                    date = extmetadata.get("DateTime", {}).get("value", "")
-
-                                if date:
-                                    if "T" in date:
-                                        date = date.split("T")[0]
-                                    elif len(date) > 10:
-                                        date = date[:10]
-
-                                photos.append({
-                                    "id": item.get("pageid"),
-                                    "url": image_data.get("url"),
-                                    "thumbnail": image_data.get("thumburl", image_data.get("url")),
-                                    "date": date,
-                                    "source": "Wikimedia Commons"
-                                })
-        except Exception as e:
-            logger.error(f"Wikimedia geosearch error: {e}")
-
-        # Pic4Carto (aggregates Mapillary, Flickr, etc.)
-        if len(photos) < 3:
-            try:
-                params_pic = {
-                    "lat": lat,
-                    "lng": lon,
-                    "radius": 200,
-                    "limit": 10
-                }
-                pic_response = requests.get(pic4carto_url, params=params_pic, timeout=5)
-
-                if pic_response.ok:
-                    pic_data = pic_response.json()
-                    for item in pic_data:
-                        title = item.get("title", "")
-                        description = item.get("description", "")
-
-                        if not is_relevant_photo(title, description):
-                            continue
-
-                        date_taken = item.get("date_taken", "")
-                        if date_taken and "T" in date_taken:
-                            date_taken = date_taken.split("T")[0]
-
-                        photos.append({
-                            "id": item.get("id"),
-                            "url": item.get("url"),
-                            "thumbnail": item.get("thumbnail_url", item.get("url")),
-                            "date": date_taken,
-                            "source": item.get("provider", "Pic4Carto")
-                        })
-            except Exception as e:
-                logger.error(f"Pic4Carto error: {e}")
-
-        # Wikimedia text search
-        if len(photos) < 2:
-            try:
-                search_query = name
-                if category:
-                    category_map = {
-                        'church': 'chiesa',
-                        'restaurant': 'ristorante',
-                        'food': 'ristorante',
-                        'castle': 'castello',
-                        'monument': 'monumento',
-                        'lake': 'lago',
-                        'mountain_pass': 'passo',
-                        'waterfall': 'cascata',
-                        'vineyard': 'vigneto',
-                        'historic': 'storico',
-                        'viewpoint': 'belvedere',
-                        'museum': 'museo',
-                        'archaeological': 'scavi archeologici',
-                    }
-                    if category in category_map:
-                        search_query = f"{name} {category_map[category]}"
-
-                params_search = {
-                    "action": "query",
-                    "format": "json",
-                    "list": "search",
-                    "srsearch": search_query,
-                    "srnamespace": "6",
-                    "srlimit": "5"
-                }
-
-                search_response = requests.get(wikimedia_url, params=params_search, headers=headers, timeout=10)
-                search_data = search_response.json()
-
-                if "query" in search_data and "search" in search_data["query"]:
-                    for item in search_data["query"]["search"]:
-                        title = item["title"]
-                        if title.startswith("File:"):
-                            title = title[5:]
-
-                        params_info = {
-                            "action": "query",
-                            "format": "json",
-                            "titles": f"File:{title}",
-                            "prop": "imageinfo|categories",
-                            "iiprop": "url|extmetadata",
-                            "cllimit": 10
-                        }
-
-                        info_response = requests.get(wikimedia_url, params=params_info, headers=headers, timeout=10)
-                        info_data = info_response.json()
-
-                        pages = info_data.get("query", {}).get("pages", {})
-                        for page_id, page_info in pages.items():
-                            if page_id != "-1":
-                                imageinfo = page_info.get("imageinfo", [])
-                                categories = page_info.get("categories", [])
-                                category_text = " ".join([cat.get("title", "") for cat in categories])
-
-                                if imageinfo:
-                                    image_data = imageinfo[0]
-                                    extmetadata = image_data.get("extmetadata", {})
-                                    description = extmetadata.get("ImageDescription", {}).get("value", "")
-
-                                    if not is_relevant_photo(title, description + " " + category_text):
-                                        continue
-
-                                    date = extmetadata.get("DateTimeOriginal", {}).get("value", "")
-                                    if not date:
-                                        date = extmetadata.get("DateTime", {}).get("value", "")
-
-                                    if date and "T" in date:
-                                        date = date.split("T")[0]
-                                    elif date and len(date) > 10:
-                                        date = date[:10]
-
-                                    photos.append({
-                                        "id": item.get("pageid"),
-                                        "url": image_data.get("url"),
-                                        "thumbnail": image_data.get("thumburl", image_data.get("url")),
-                                        "date": date,
-                                        "source": "Wikimedia Commons"
-                                    })
-            except Exception as e:
-                logger.error(f"Wikimedia text search error: {e}")
-
-        # Wikipedia description (when no photos are available)
-        wikipedia_description = ""
-        try:
-            params_wiki = {
-                "action": "query",
-                "format": "json",
-                "list": "geosearch",
-                "gscoord": f"{lat}|{lon}",
-                "gsradius": "500",
-                "gslimit": "1"
-            }
-
-            wiki_response = requests.get(wikipedia_url, params=params_wiki, headers=headers, timeout=5)
-            wiki_data = wiki_response.json()
-
-            if "query" in wiki_data and "geosearch" in wiki_data["query"]:
-                for item in wiki_data["query"]["geosearch"]:
-                    page_title = item["title"]
-
-                    params_extract = {
-                        "action": "query",
-                        "format": "json",
-                        "titles": page_title,
-                        "prop": "extracts",
-                        "exintro": True,
-                        "explaintext": True,
-                        "exchars": 300
-                    }
-
-                    extract_response = requests.get(wikipedia_url, params=params_extract, headers=headers, timeout=5)
-                    extract_data = extract_response.json()
-
-                    pages = extract_data.get("query", {}).get("pages", {})
-                    for page_id, page_info in pages.items():
-                        if page_id != "-1":
-                            wikipedia_description = page_info.get("extract", "")
-                            break
-        except Exception as e:
-            logger.error(f"Wikipedia error: {e}")
-
-        # Remove duplicates by URL
-        seen_urls = set()
         unique_photos = []
-        for photo in photos:
-            if photo["url"] not in seen_urls:
-                seen_urls.add(photo["url"])
-                unique_photos.append(photo)
+        seen_urls = set()
+        for p in photos:
+            if p['url'] not in seen_urls:
+                seen_urls.add(p['url'])
+                unique_photos.append(p)
 
         logger.info(f"Found {len(unique_photos)} relevant photos for {name} after filtering")
 
@@ -1402,11 +1158,11 @@ def poi_photos(request):
             "wikipedia_description": wikipedia_description
         }
 
+        cache.set(cache_key, response_data, timeout=86400)
+
         serializer = POIPhotoResponseSerializer(response_data)
         return Response(serializer.data)
 
     except Exception as e:
-        logger.error(f"Error fetching photos: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error fetching photos: {e}", exc_info=True)
         return Response({"photos": [], "wikipedia_description": ""})
