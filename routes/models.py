@@ -88,6 +88,15 @@ class Route(models.Model):
         help_text="Punteggio panoramico totale del percorso",
     )
 
+    # fields to detect duplicate routes
+    fingerprint = models.CharField(
+        max_length=64,
+        blank=True,
+        null=True,
+        verbose_name="Impronta univoca",
+        help_text="Hash dei dati del percorso per rilevare duplicati",
+    )
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Data creazione")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="Data aggiornamento")
@@ -102,6 +111,13 @@ class Route(models.Model):
             models.Index(fields=["owner", "visibility"]),
             models.Index(fields=["visibility"]),
             models.Index(fields=["created_at"]),
+        ]
+        # Enforce uniqueness per owner + fingerprint
+        constraints = [
+            models.UniqueConstraint(
+                fields=['owner', 'fingerprint'],
+                name='unique_route_per_owner_fingerprint'
+            )
         ]
 
     def __str__(self):

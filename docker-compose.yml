@@ -21,6 +21,7 @@ services:
   web:
     build: .
     volumes:
+      - .:/app
       - ./dem_data:/dem_data
     ports:
       - "8000:8000"
