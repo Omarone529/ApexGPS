@@ -9,7 +9,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 
 from gis_data.models import PointOfInterest
-from gis_data.utils.osm_utils import OSMConfig  # AGGIUNGI QUESTA RIGA
+from gis_data.utils.osm_utils import OSMConfig
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ class POIDataParser:
     """Parses OSM element data into POI objects."""
 
     @staticmethod
-    def parse_element(element: dict, category: str) -> dict | None:
+    def parse_element(element: dict, category: str, region: str = None) -> dict | None:
         """Parse OSM element into POI dictionary."""
         if element.get("type") != "node":
             return None
@@ -101,7 +101,7 @@ class POIDataParser:
             if tags.get("historic"):
                 description_parts.append(f"Storico: {tags['historic']}")
 
-            return {
+            poi_data = {
                 "osm_id": element.get("id"),
                 "name": str(name)[:200],
                 "category": category,
@@ -111,6 +111,12 @@ class POIDataParser:
                 else "",
                 "tags": tags,
             }
+
+            if region:
+                poi_data["region"] = region
+
+            return poi_data
+
         except Exception:
             return None
 
@@ -118,9 +124,10 @@ class POIDataParser:
 class CategoryImporter:
     """Imports POIs for a single category."""
 
-    def __init__(self, category: str):
+    def __init__(self, category: str, region: str = None):
         """Initialize importer."""
         self.category = category
+        self.region = region
         self.api_client = APIClient()
         self.parser = POIDataParser()
         self.endpoints = self._get_endpoints_from_env()
@@ -160,7 +167,7 @@ class CategoryImporter:
 
             pois = []
             for element in elements:
-                poi = self.parser.parse_element(element, self.category)
+                poi = self.parser.parse_element(element, self.category, self.region)
                 if poi:
                     pois.append(poi)
 
@@ -232,6 +239,11 @@ class Command(BaseCommand):
             action="store_true",
             help="Enable verbose output",
         )
+        parser.add_argument(
+            "--region",
+            type=str,
+            help="Region name to assign to imported POIs",
+        )
 
     def _get_bbox(self, area: str) -> str:
         """Get bounding box for area."""
@@ -263,9 +275,13 @@ class Command(BaseCommand):
 
         bbox = self._get_bbox(options["area"])
 
+        region_to_assign = options["region"] or options["area"]
+        if region_to_assign == "italy":
+            region_to_assign = None
+
         results = []
         for category in categories:
-            importer = CategoryImporter(category)
+            importer = CategoryImporter(category, region=region_to_assign)
             result = importer.import_category(bbox)
             results.append(result)
 
@@ -287,7 +303,7 @@ class Command(BaseCommand):
 
             for result in successful:
                 self.stdout.write(
-                    f"{result['category']}: " f"{result['pois_saved']:,} POIs saved"
+                    f"{result['category']}: {result['pois_saved']:,} POIs saved"
                 )
 
         if failed:
