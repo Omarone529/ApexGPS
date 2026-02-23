@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "django.contrib.gis",
     "django_filters",
+    "drf_spectacular",
     # OAuth apps
     "social_django",
     # Local apps
@@ -99,6 +100,13 @@ DATABASES = {
         "PASSWORD": os.environ.get("DB_PASSWORD"),
         "HOST": os.environ.get("DB_HOST"),
         "PORT": os.environ.get("DB_PORT"),
+    }
+}
+
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'unique-snowflake',
     }
 }
 
@@ -159,6 +167,7 @@ REST_FRAMEWORK = {
         "rest_framework.authentication.SessionAuthentication",
         "rest_framework.authentication.BasicAuthentication",
     ],
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
 
 # OAuth Settings
@@ -230,6 +239,13 @@ CORS_ALLOW_HEADERS = [
     "x-requested-with",
 ]
 
+#drf settings
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'La mia API',
+    'DESCRIPTION': 'Descrizione della mia API',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+}
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(hours=2),

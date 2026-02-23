@@ -97,23 +97,3 @@ Eseguire lo script di gestione Django che costruisce il grafo navigabile e pre-c
 Esegue la creazione della topologia (pgr_createTopology) e il pre-calcolo dei punteggi panoramici.
 python manage.py prepare_gis_data --area {codice_area}
 python manage.py runserver
-
-## 4. Documentazione API (Per Sviluppatori Frontend)
-
-L'interfaccia di comunicazione è standard REST, con risposte in formato JSON. Tutti gli endpoint sono accessibili a partire dalla root dell'API: /api/
-
-| Categoria | Metodo | Endpoint | Parametri Obbligatori | Funzione |
-| :--- | :--- | :--- | :--- | :--- |
-| **Utenti** | `GET` | `/api/users/` | - | Gestione profili e lista utenti. |
-| **GIS Data** | `GET` | `/api/gis_data/points-of-interest/` | - | Recupera i punti di interesse lungo i percorsi. |
-| **GIS Data** | `GET` | `/api/gis_data/scenic-areas/` | - | Elenco delle aree panoramiche mappate. |
-| **DEM Data** | `GET` | `/api/dem_data/elevation-queries/` | `lat`, `lon` | Interrogazioni puntuali sull'altitudine (DEM). |
-| **DEM Data** | `GET` | `/api/dem_data/dem/` | - | Accesso ai dati grezzi del Digital Elevation Model. |
-| **Routing** | `GET/POST` | `/api/routes/routes/` | - | Operazioni CRUD sui percorsi salvati. |
-| **Routing** | `GET/POST` | `/api/routes/stops/` | `route_id` | Gestione delle tappe intermedie dei percorsi. |
-| **Routing** | `POST` | `/api/routes/calculate-benchmark/` | `start_lat`, `start_lon`, `end_lat`, `end_lon` | **Solo Backend/Dev**: Calcolo baseline (non usare in Frontend). |
-| **Routing** | `POST` | `/api/routes/calculate-scenic/` | `start_lat`, `start_lon`, `end_lat`, `end_lon`, `preference` | **Core**: Calcolo percorso panoramico ottimizzato. |
-| **Routing** | `GET` | `/api/routes/my-routes/` | - | Visualizza i percorsi personali dell'utente. |
-| **Routing** | `GET` | `/api/routes/public/` | - | Elenco dei percorsi condivisi pubblicamente. |
-| **Auth** | `POST` | `/api/authentication/` | `username`, `password` | Endpoint per il login e gestione sessione. |
-| **Admin** | `ANY` | `/api/admin/` | - | Interfaccia di amministrazione Django. |

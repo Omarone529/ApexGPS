@@ -2,6 +2,8 @@ from django.contrib.auth import get_user_model
 from django.contrib.gis.geos import Point
 from rest_framework import serializers
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
+import hashlib
+import json
 
 from .models import Route, Stop
 
@@ -17,7 +19,8 @@ __all__ = [
     "RouteCalculationResultSerializer",
     "RouteCalculationResponseSerializer",
     "RouteSaveFromCalculationSerializer",
-    "GeocodeSearchResultSerializer"
+    "GeocodeSearchResultSerializer",
+    "POIPhotoResponseSerializer"
 ]
 
 
@@ -670,6 +673,39 @@ class RouteSaveFromCalculationSerializer(serializers.Serializer):
         required=True, help_text="Dati del calcolo ottenuti dall'endpoint di calcolo"
     )
 
+    @staticmethod
+    def _generate_fingerprint(calc_data, user_id):
+        """
+        Generate a SHA256 fingerprint based on:
+        - user_id
+        - start coordinates (rounded to 5 decimals)
+        - end coordinates (rounded to 5 decimals)
+        - preference
+        - waypoints in order (each rounded to 5 decimals)
+        """
+        start = calc_data['start_location']
+        end = calc_data['end_location']
+        start_coords = (round(start.y, 5), round(start.x, 5))
+        end_coords = (round(end.y, 5), round(end.x, 5))
+
+        waypoints = calc_data.get('waypoints', [])
+        wp_coords = []
+        for wp in waypoints:
+            lat = wp.get('lat')
+            lon = wp.get('lon')
+            if lat is not None and lon is not None:
+                wp_coords.append((round(lat, 5), round(lon, 5)))
+
+        data_for_hash = {
+            'user_id': user_id,
+            'start': start_coords,
+            'end': end_coords,
+            'preference': calc_data.get('preference', 'balanced'),
+            'waypoints': wp_coords,
+        }
+        json_str = json.dumps(data_for_hash, sort_keys=True)
+        return hashlib.sha256(json_str.encode('utf-8')).hexdigest()
+
     def validate(self, data):
         """Verify user permissions according to specifications."""
         user = self.context["request"].user
@@ -734,12 +770,25 @@ class RouteSaveFromCalculationSerializer(serializers.Serializer):
                     " Usa {'lat': 41.9028, 'lon': 12.4964}"
                 ) from e
 
+        # Generate fingerprint and check for duplicates
+        fingerprint = self._generate_fingerprint(calc_data, user.id)
+
+        if Route.objects.filter(owner=user, fingerprint=fingerprint).exists():
+            raise serializers.ValidationError(
+                "Percorso già salvato in precedenza.",
+                code='duplicate_route'
+            )
+
+        # Store fingerprint to be used in create()
+        data['fingerprint'] = fingerprint
+
         return data
 
     def create(self, validated_data):
         """Create a new route from the calculation data."""
         user = self.context["request"].user
         calc_data = validated_data["calculation_data"]
+        fingerprint = validated_data["fingerprint"]
 
         route = Route.objects.create(
             name=validated_data["name"],
@@ -752,6 +801,7 @@ class RouteSaveFromCalculationSerializer(serializers.Serializer):
             distance_km=calc_data["total_distance_km"],
             estimated_time_min=calc_data["total_time_minutes"],
             total_scenic_score=calc_data.get("total_scenic_score", 0),
+            fingerprint=fingerprint,
         )
 
         # Create stops for waypoints if they exist

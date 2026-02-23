@@ -21,6 +21,7 @@ services:
   web:
     build: .
     volumes:
+      - .:/app
       - ./dem_data:/dem_data
     ports:
       - "8000:8000"
@@ -53,6 +54,10 @@ services:
       NOMINATIM_URL: ${NOMINATIM_URL}
       PYTHONMALLOC: malloc
       MALLOC_ARENA_MAX: 2
+      WIKIMEDIA_API_URL: ${WIKIMEDIA_API_URL}
+      WIKIPEDIA_API_URL: ${WIKIPEDIA_API_URL}
+      PIC4CARTO_API_URL: ${PIC4CARTO_API_URL}
+      API_USER_AGENT: ${API_USER_AGENT}
 
 volumes:
   pgdata:
