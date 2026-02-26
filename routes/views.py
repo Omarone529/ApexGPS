@@ -2,6 +2,9 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import base64
+from django.core.files.base import ContentFile
+import uuid
 
 from django.core.cache import cache
 

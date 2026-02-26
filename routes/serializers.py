@@ -1,5 +1,9 @@
+import base64
+import uuid
+
 from django.contrib.auth import get_user_model
 from django.contrib.gis.geos import Point
+from django.core.files.base import ContentFile
 from rest_framework import serializers
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
 import hashlib
@@ -94,6 +98,7 @@ class RouteCreateSerializer(serializers.ModelSerializer):
             "preference",
             "start_location",
             "end_location",
+            "screenshot",
             "created_at",
         ]
         read_only_fields = ["id", "owner_username", "created_at"]
@@ -187,6 +192,7 @@ class RouteUpdateSerializer(serializers.ModelSerializer):
             "distance_km",
             "estimated_time_min",
             "total_scenic_score",
+            "screenshot",
             "created_at",
             "updated_at",
             "stops",
@@ -204,6 +210,7 @@ class RouteUpdateSerializer(serializers.ModelSerializer):
             "distance_km",
             "estimated_time_min",
             "total_scenic_score",
+            "screenshot",
         ]
 
     def to_representation(self, instance):
@@ -290,6 +297,7 @@ class RouteSerializer(serializers.ModelSerializer):
             "distance_km",
             "estimated_time_min",
             "total_scenic_score",
+            "screenshot",
             "created_at",
             "updated_at",
             "stops",
@@ -307,6 +315,7 @@ class RouteSerializer(serializers.ModelSerializer):
             "distance_km",
             "estimated_time_min",
             "total_scenic_score",
+            "screenshot",
         ]
 
     def to_representation(self, instance):
@@ -672,6 +681,11 @@ class RouteSaveFromCalculationSerializer(serializers.Serializer):
     calculation_data = serializers.DictField(
         required=True, help_text="Dati del calcolo ottenuti dall'endpoint di calcolo"
     )
+    screenshot = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        help_text="Screenshot del percorso in base64 (data:image/jpeg;base64,...)"
+    )
 
     @staticmethod
     def _generate_fingerprint(calc_data, user_id):
@@ -789,6 +803,7 @@ class RouteSaveFromCalculationSerializer(serializers.Serializer):
         user = self.context["request"].user
         calc_data = validated_data["calculation_data"]
         fingerprint = validated_data["fingerprint"]
+        screenshot_b64 = validated_data.get("screenshot", "")
 
         route = Route.objects.create(
             name=validated_data["name"],
@@ -803,6 +818,18 @@ class RouteSaveFromCalculationSerializer(serializers.Serializer):
             total_scenic_score=calc_data.get("total_scenic_score", 0),
             fingerprint=fingerprint,
         )
+
+        if screenshot_b64:
+            try:
+                format, imgstr = screenshot_b64.split(';base64,')
+                ext = format.split('/')[-1]  # es. 'jpeg'
+                data = ContentFile(base64.b64decode(imgstr), name=f"{uuid.uuid4()}.{ext}")
+                route.screenshot.save(f"route_{route.id}.{ext}", data, save=True)
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Errore nel salvataggio dello screenshot: {e}")
+
 
         # Create stops for waypoints if they exist
         waypoints = calc_data.get("waypoints", [])
