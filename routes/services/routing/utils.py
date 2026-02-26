@@ -316,8 +316,21 @@ def _create_route_geometry(segments: list[dict]) -> LineString | None:
 
     for segment in segments:
         coords = segment.get("geometry_coords", [])
-        if coords:
-            all_coords.extend(coords)
+        if not coords:
+            continue
+
+        if all_coords:
+            last = all_coords[-1]
+            first = coords[0]
+            last_reversed = coords[-1]
+
+            dist_normal = abs(first[0] - last[0]) + abs(first[1] - last[1])
+            dist_reversed = abs(last_reversed[0] - last[0]) + abs(last_reversed[1] - last[1])
+
+            if dist_reversed < dist_normal:
+                coords = list(reversed(coords))
+
+        all_coords.extend(coords)
 
     return _create_linestring_from_coords(all_coords)
 
