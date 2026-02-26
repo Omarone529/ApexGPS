@@ -96,6 +96,14 @@ class Route(models.Model):
         verbose_name="Impronta univoca",
         help_text="Hash dei dati del percorso per rilevare duplicati",
     )
+    #screenshot of the route
+    screenshot = models.ImageField(
+        upload_to='route_screenshots/',
+        null=True,
+        blank=True,
+        verbose_name="Screenshot del percorso",
+        help_text="Immagine statica della mappa con il percorso tracciato"
+    )
 
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Data creazione")
