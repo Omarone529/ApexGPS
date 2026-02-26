@@ -16,7 +16,7 @@ class APIRootView(APIView):
                     "refresh": reverse("token_refresh", request=request, format=format),
                     "register": reverse("register", request=request, format=format),
                     "me": reverse("me", request=request, format=format),
-                    "google": reverse("google_login", request=request, format=format),  # <-- NUOVO
+                    "google": reverse("google_login", request=request, format=format),
                 },
                 # Users management
                 "users": reverse("customuser-list", request=request, format=format),
