@@ -1,5 +1,6 @@
 services:
   db:
+    platform: linux/amd64
     build: ./db
     volumes:
       - pgdata:/var/lib/postgresql
@@ -19,6 +20,7 @@ services:
       start_period: 30s
 
   web:
+    platform: linux/amd64
     build: .
     volumes:
       - .:/app
