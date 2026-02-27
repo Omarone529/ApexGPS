@@ -5,10 +5,14 @@ import logging
 import polyline
 import re
 import requests
+from rest_framework import status
+from rest_framework.response import Response
 
-logger = logging.getLogger(__name__)
+from routes.models import Route
 
-__all__ = [
+logger = logging.getLogger(_name_)
+
+_all_ = [
     "_validate_coordinates",
     "_find_nearest_vertex",
     "_get_road_segment_by_id",
@@ -35,7 +39,10 @@ __all__ = [
     "_fetch_wikimedia_geosearch",
     "_fetch_pic4carto",
     "_fetch_wikipedia_description",
-    "_fetch_wikipedia_image"
+    "_fetch_wikipedia_image",
+    "_compute_straight_distance_km",
+    "_check_route_ownership",
+    "_routing_services_unavailable"
 ]
 
 
@@ -930,3 +937,34 @@ def _fetch_wikipedia_description(lat, lon, name, wikipedia_url, headers):
     except Exception as e:
         logger.error(f"Wikipedia geosearch error: {e}")
     return ""
+
+def _compute_straight_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Return an approximate straight-line distance in kilometres."""
+    lat_diff = abs(lat1 - lat2) * 111          # 1 degree lat ≈ 111 km
+    lon_diff = abs(lon1 - lon2) * 111 * 0.6    # rough lon correction
+    return (lat_diff * 2 + lon_diff * 2) ** 0.5
+
+
+def _check_route_ownership(route: Route, user) -> Response | None:
+    """
+    Return a 403 Response if user is neither the route owner nor staff,
+    otherwise return None (meaning the check passed).
+    """
+    if route.owner != user and not user.is_staff:
+        return Response(
+            {"error": "Only the route owner can perform this action."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return None
+
+
+def _routing_services_unavailable() -> Response:
+    return Response(
+        {
+            "error": (
+                "Routing services not available. "
+                "Please ensure the database is prepared."
+            )
+        },
+        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
