@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.contrib.gis.db import models as gis_models
 from django.db import models
+from django.utils import timezone
 
 User = get_user_model()
 
@@ -145,13 +146,12 @@ class Route(models.Model):
 
     def can_view(self, user):
         """Determine if a user can view this route."""
-        if not user.is_authenticated:
-            return self.visibility == "public"
-
-        if user == self.owner or user.is_staff:
-            return True
-
-        return self.visibility in ["public", "link"]
+        if self.hiddenUntil and self.hiddenUntil > timezone.now():
+            if not user.is_authenticated:
+                return False
+            if user == self.owner or user.is_staff:
+                return True
+            return False
 
     def get_stops_count(self):
         """Get the number of stops in this route (excluding start/end)."""

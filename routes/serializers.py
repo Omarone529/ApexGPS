@@ -279,6 +279,7 @@ class RouteSerializer(serializers.ModelSerializer):
     owner_username = serializers.ReadOnlyField(source="owner.username")
     stops = StopSerializer(many=True, read_only=True)
     stop_count = serializers.IntegerField(source="get_stops_count", read_only=True)
+    hidden_until = serializers.SerializerMethodField()
 
     class Meta:
         """Meta class for Route serializer."""
@@ -302,6 +303,7 @@ class RouteSerializer(serializers.ModelSerializer):
             "updated_at",
             "stops",
             "stop_count",
+            "hidden_until",
         ]
         read_only_fields = [
             "id",
@@ -317,6 +319,12 @@ class RouteSerializer(serializers.ModelSerializer):
             "total_scenic_score",
             "screenshot",
         ]
+
+    def get_hidden_until(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_staff:
+            return obj.hiddenUntil
+        return None
 
     def to_representation(self, instance):
         """Convert PointFields to lat/lon dicts in response."""
@@ -874,4 +882,12 @@ class POIPhotoResponseSerializer(serializers.Serializer):
         allow_blank=True,
         default='',
         help_text='Breve descrizione del luogo da Wikipedia'
+    )
+
+
+class HiddenUntilSerializer(serializers.Serializer):
+    hidden_until = serializers.DateTimeField(
+        allow_null=True,
+        required=False,
+        help_text="Data e ora fino a cui il percorso sarà privato. Null per rimuovere il blocco."
     )

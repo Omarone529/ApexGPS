@@ -7,9 +7,11 @@ from django.contrib.gis.geos import Point
 from django.core.cache import cache
 from django.db import models
 from django_filters.rest_framework import DjangoFilterBackend
+from django.utils import timezone
+from django.db.models import Q
 from rest_framework import filters, permissions, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAdminUser
 from rest_framework.response import Response
 
 from gis_data.services.topology_service import logger
@@ -36,6 +38,7 @@ from .serializers import (
 )
 from .services.geocoding import GeocodingService
 from .services.routing.route_recalculation import RouteRecalculationService
+from .serializers import HiddenUntilSerializer
 
 try:
     from routes.services.routing.fast_routing import FastRoutingService
@@ -76,19 +79,29 @@ class RouteViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         """Get the queryset of routes based on user permissions."""
         user = self.request.user
-
+        now = timezone.now()
         if user.is_staff:
             return Route.objects.all()
 
         if user.is_authenticated:
             return Route.objects.filter(
-                models.Q(owner=user)
-                | models.Q(visibility="public")
-                | models.Q(visibility="link")
+                Q(owner=user) |
+                (
+                        Q(visibility__in=["public", "link"]) &
+                        (Q(hiddenUntil__isnull=True) | Q(hiddenUntil__lte=now))
+                )
+            )
+        else:
+            # Anonimo: solo percorsi pubblici e non nascosti
+            return Route.objects.filter(
+                visibility="public",
+                hiddenUntil__isnull=True
+            ) | Route.objects.filter(
+                visibility="public",
+               hiddenUntil__lte=now
             )
 
-        # Anonymous users can only see public routes
-        return Route.objects.filter(visibility="public")
+
 
     def perform_create(self, serializer):
         """Perform route creation with automatic owner assignment."""
@@ -101,6 +114,29 @@ class RouteViewSet(viewsets.ModelViewSet):
     # ------------------------------------------------------------------
     # Custom actions
     # ------------------------------------------------------------------
+
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdminUser])
+    def ban(self, request, pk=None):
+        """Imposta la data di hiddenUntil per il percorso (solo admin)."""
+        route = self.get_object()
+        serializer = HiddenUntilSerializer(data=request.data)
+        if serializer.is_valid():
+            route.hiddenUntil = serializer.validated_data.get('hidden_until')
+            route.save(update_fields=['hiddenUntil'])
+            return Response({
+                'status': 'hidden_until aggiornato',
+                'hidden_until': route.hiddenUntil
+            })
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['delete'], permission_classes=[IsAdminUser])
+    def unban(self, request, pk=None):
+        """Rimuove il blocco (hiddenUntil = null)."""
+        route = self.get_object()
+        route.hiddenUntil = None
+        route.save(update_fields=['hiddenUntil'])
+        return Response({'status': 'hidden_until rimosso'})
 
     @action(detail=False, methods=["get"])
     def my_routes(self, request):
@@ -753,16 +789,32 @@ class StopViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         """Return stops for routes the user can access."""
         user = self.request.user
+        now = timezone.now()
 
         if user.is_staff:
             return Stop.objects.all()
 
         if user.is_authenticated:
+            # Stops di percorsi:
+            # - di proprietà dell'utente
+            # - pubblici o con link, purché non nascosti
             return Stop.objects.filter(
-                models.Q(route__owner=user) | models.Q(route__visibility="public")
+                Q(route__owner=user) |
+                (
+                        Q(route__visibility__in=["public", "link"]) &
+                        (Q(route__hiddenUntil__isnull=True) | Q(route__hiddenUntil__lte=now))
+                )
+            )
+        else:
+            # Anonimo: solo stops di percorsi pubblici e non nascosti
+            return Stop.objects.filter(
+                route__visibility="public",
+                route__hiddenUntil__isnull=True
+            ) | Stop.objects.filter(
+                route__visibility="public",
+                route__hiddenUntil__lte=now
             )
 
-        return Stop.objects.filter(route__visibility="public")
 
     def _assert_can_modify_route(self, route):
         if route.owner != self.request.user and not self.request.user.is_staff:
