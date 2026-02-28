@@ -105,6 +105,13 @@ class Route(models.Model):
         help_text="Immagine statica della mappa con il percorso tracciato"
     )
 
+    hiddenUntil  = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="hiddenUntil ",
+        help_text="Data e ora per privatizzazione tour",
+    )
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Data creazione")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="Data aggiornamento")

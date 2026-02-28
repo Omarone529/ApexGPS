@@ -32,6 +32,13 @@ class CustomUser(AbstractUser):
         help_text=_("URL della foto profilo da Google"),
     )
 
+    hiddenUntil = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name=_("hiddenUntil "),
+        help_text=_("Data e ora per privatizzare"),
+    )
+
     groups = models.ManyToManyField(
         Group,
         verbose_name=_("Gruppi"),
