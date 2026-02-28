@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.contrib.gis.db import models as gis_models
 from django.db import models
+from django.utils import timezone
 
 User = get_user_model()
 
@@ -105,6 +106,13 @@ class Route(models.Model):
         help_text="Immagine statica della mappa con il percorso tracciato"
     )
 
+    hiddenUntil  = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="hiddenUntil ",
+        help_text="Data e ora per privatizzazione tour",
+    )
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Data creazione")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="Data aggiornamento")
@@ -138,13 +146,10 @@ class Route(models.Model):
 
     def can_view(self, user):
         """Determine if a user can view this route."""
-        if not user.is_authenticated:
-            return self.visibility == "public"
-
-        if user == self.owner or user.is_staff:
-            return True
-
-        return self.visibility in ["public", "link"]
+        if self.owner.hiddenUntil and self.owner.hiddenUntil > timezone.now():
+            if user.is_authenticated and (user == self.owner or user.is_staff):
+                return True
+            return False
 
     def get_stops_count(self):
         """Get the number of stops in this route (excluding start/end)."""
@@ -217,12 +222,9 @@ class Stop(models.Model):
         return f"Tappa {self.order}"
 
     def save(self, *args, **kwargs):
-        """Ensure order is unique and sequential within the route."""
-        # If this is a new stop and no order specified, put it at the end
-        if not self.pk and not self.order:
-            last_stop = Stop.objects.filter(route=self.route).order_by("-order").first()
-            self.order = (last_stop.order + 1) if last_stop else 1
 
+        if self.owner.hiddenUntil and self.owner.hiddenUntil > timezone.now():
+            self.visibility = 'private'
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):

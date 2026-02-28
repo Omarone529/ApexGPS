@@ -11,7 +11,7 @@ from .serializers import (
     CustomUserPublicSerializer,
     CustomUserWriteSerializer,
     RegisterSerializer,
-    GoogleAuthSerializer,
+    GoogleAuthSerializer, HiddenUntilSerializer,
 )
 
 
@@ -120,3 +120,27 @@ class CustomUserViewSet(viewsets.ModelViewSet):
         """
         serializer = self.get_serializer(request.user)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdminUser])
+    def ban(self, request, pk=None):
+        """Imposta hiddenUntil per l'utente e rende privati tutti i suoi percorsi."""
+        user = self.get_object()
+        serializer = HiddenUntilSerializer(data=request.data)
+        if serializer.is_valid():
+            user.hiddenUntil = serializer.validated_data.get('hidden_until')
+            user.save(update_fields=['hiddenUntil'])
+            # Forza tutti i percorsi dell'utente a privati
+            user.routes.update(visibility='private')
+            return Response({
+                'status': 'user banned',
+                'hidden_until': user.hiddenUntil
+            })
+        return Response(serializer.errors, status=400)
+
+    @action(detail=True, methods=['delete'], permission_classes=[IsAdminUser])
+    def unban(self, request, pk=None):
+        """Rimuove il ban (hiddenUntil = null)."""
+        user = self.get_object()
+        user.hiddenUntil = None
+        user.save(update_fields=['hiddenUntil'])
+        return Response({'status': 'user unbanned'})
