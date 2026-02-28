@@ -146,10 +146,8 @@ class Route(models.Model):
 
     def can_view(self, user):
         """Determine if a user can view this route."""
-        if self.hiddenUntil and self.hiddenUntil > timezone.now():
-            if not user.is_authenticated:
-                return False
-            if user == self.owner or user.is_staff:
+        if self.owner.hiddenUntil and self.owner.hiddenUntil > timezone.now():
+            if user.is_authenticated and (user == self.owner or user.is_staff):
                 return True
             return False
 
@@ -224,12 +222,9 @@ class Stop(models.Model):
         return f"Tappa {self.order}"
 
     def save(self, *args, **kwargs):
-        """Ensure order is unique and sequential within the route."""
-        # If this is a new stop and no order specified, put it at the end
-        if not self.pk and not self.order:
-            last_stop = Stop.objects.filter(route=self.route).order_by("-order").first()
-            self.order = (last_stop.order + 1) if last_stop else 1
 
+        if self.owner.hiddenUntil and self.owner.hiddenUntil > timezone.now():
+            self.visibility = 'private'
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):

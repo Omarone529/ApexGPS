@@ -4,6 +4,7 @@ import uuid
 from django.contrib.auth import get_user_model
 from django.contrib.gis.geos import Point
 from django.core.files.base import ContentFile
+from django.utils import timezone
 from rest_framework import serializers
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
 import hashlib
@@ -102,6 +103,13 @@ class RouteCreateSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = ["id", "owner_username", "created_at"]
+
+    def validate_visibility(self, value):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            if request.user.hiddenUntil and request.user.hiddenUntil > timezone.now() and value == 'public':
+                raise serializers.ValidationError("Non puoi pubblicare percorsi mentre sei soggetto a restrizioni.")
+        return value
 
     def to_representation(self, instance):
         """Convert PointFields to lat/lon dicts in response."""
@@ -213,6 +221,15 @@ class RouteUpdateSerializer(serializers.ModelSerializer):
             "screenshot",
         ]
 
+    def validate_visibility(self, value):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            # if the banned user try to put public a tour
+            if request.user.hiddenUntil and request.user.hiddenUntil > timezone.now() and value == 'public':
+                raise serializers.ValidationError(
+                    "Non puoi pubblicare percorsi mentre sei soggetto a restrizioni."
+                )
+        return value
     def to_representation(self, instance):
         """Convert PointFields to lat/lon dicts in response."""
         data = super().to_representation(instance)
@@ -731,6 +748,11 @@ class RouteSaveFromCalculationSerializer(serializers.Serializer):
     def validate(self, data):
         """Verify user permissions according to specifications."""
         user = self.context["request"].user
+
+        if user.hiddenUntil and user.hiddenUntil > timezone.now() and data.get("visibility") == "public":
+            raise serializers.ValidationError(
+                "Non puoi pubblicare percorsi mentre sei soggetto a restrizioni."
+            )
 
         if not user.is_authenticated:
             raise serializers.ValidationError(

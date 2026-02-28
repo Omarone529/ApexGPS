@@ -80,6 +80,7 @@ class RouteViewSet(viewsets.ModelViewSet):
         """Get the queryset of routes based on user permissions."""
         user = self.request.user
         now = timezone.now()
+
         if user.is_staff:
             return Route.objects.all()
 
@@ -87,18 +88,18 @@ class RouteViewSet(viewsets.ModelViewSet):
             return Route.objects.filter(
                 Q(owner=user) |
                 (
-                        Q(visibility__in=["public", "link"]) &
-                        (Q(hiddenUntil__isnull=True) | Q(hiddenUntil__lte=now))
+                        Q(visibility='public') &
+                        (Q(owner__hiddenUntil__isnull=True) | Q(owner__hiddenUntil__lte=now))
                 )
             )
         else:
             # Anonimo: solo percorsi pubblici e non nascosti
             return Route.objects.filter(
-                visibility="public",
-                hiddenUntil__isnull=True
+                visibility='public',
+                owner__hiddenUntil__isnull=True
             ) | Route.objects.filter(
-                visibility="public",
-               hiddenUntil__lte=now
+                visibility='public',
+                owner__hiddenUntil__lte=now
             )
 
 
@@ -801,20 +802,18 @@ class StopViewSet(viewsets.ModelViewSet):
             return Stop.objects.filter(
                 Q(route__owner=user) |
                 (
-                        Q(route__visibility__in=["public", "link"]) &
-                        (Q(route__hiddenUntil__isnull=True) | Q(route__hiddenUntil__lte=now))
+                        Q(route__visibility='public') &
+                        (Q(route__owner__hiddenUntil__isnull=True) | Q(route__owner__hiddenUntil__lte=now))
                 )
             )
         else:
-            # Anonimo: solo stops di percorsi pubblici e non nascosti
             return Stop.objects.filter(
-                route__visibility="public",
-                route__hiddenUntil__isnull=True
+                route__visibility='public',
+                route__owner__hiddenUntil__isnull=True
             ) | Stop.objects.filter(
-                route__visibility="public",
-                route__hiddenUntil__lte=now
+                route__visibility='public',
+                route__owner__hiddenUntil__lte=now
             )
-
 
     def _assert_can_modify_route(self, route):
         if route.owner != self.request.user and not self.request.user.is_staff:
