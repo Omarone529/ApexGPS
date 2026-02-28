@@ -1,4 +1,5 @@
 from django.contrib.gis.db import models
+from django.db import connection
 
 
 class PointOfInterest(models.Model):
@@ -157,8 +158,8 @@ class PointOfInterest(models.Model):
             "default": 1.0,
         }
         return (
-            scenic_weights.get(self.category, scenic_weights["default"])
-            * self.importance_score
+                scenic_weights.get(self.category, scenic_weights["default"])
+                * self.importance_score
         )
 
 
@@ -568,7 +569,7 @@ class RoadSegment(models.Model):
 
         # Balanced cost: weighted combination
         return (distance_weight * normalized_distance) - (
-            scenic_weight * normalized_scenic
+                scenic_weight * normalized_scenic
         )
 
     def get_scenic_category(self):
@@ -655,17 +656,17 @@ class RoadSegmentNoded(models.Model):
         verbose_name="Costo Bilanciato",
     )
 
-    # pgRouting v4.0 topology
+    # pgRouting topology
     source = models.BigIntegerField(
-        null = True,
-        blank = True,
+        null=True,
+        blank=True,
         db_index=True,
         verbose_name="Nodo di Partenza",
     )
 
     target = models.BigIntegerField(
-        null = True,
-        blank = True,
+        null=True,
+        blank=True,
         db_index=True,
         verbose_name="Nodo di Arrivo",
     )
@@ -685,7 +686,6 @@ class RoadSegmentNoded(models.Model):
                 self.x2, self.y2 = coords[-1]  # End point
         super().save(*args, **kwargs)
 
-
     class Meta:
         verbose_name = "Segmento Stradale (Noded)"
         verbose_name_plural = "Segmenti Stradali (Noded)"
@@ -699,3 +699,64 @@ class RoadSegmentNoded(models.Model):
 
     def __str__(self):
         return f"Noded Segment {self.gid} (orig: {self.old_id})"
+
+class RoadSegmentPOIRelation(models.Model):
+    """
+    Pre-computed relationships between road segments and Points of Interest.
+    This dramatically speeds up POI queries during route calculation.
+    Instead of doing expensive spatial joins at query time, RoadSegmentPOIRelation pre-compute
+    which POIs are near which road segments and cache the results.
+    """
+
+    road_segment = models.ForeignKey(
+        'gis_data.RoadSegment',
+        on_delete=models.CASCADE,
+        related_name='poi_relations',
+        db_index=True,
+        verbose_name="Road Segment"
+    )
+
+    poi = models.ForeignKey(
+        'gis_data.PointOfInterest',
+        on_delete=models.CASCADE,
+        related_name='segment_relations',
+        db_index=True,
+        verbose_name="Point of Interest"
+    )
+
+    distance_m = models.FloatField(
+        verbose_name="Distance (meters)",
+        help_text="Distance from POI to road segment in meters"
+    )
+
+    # For filtering and scoring
+    is_within_max_distance = models.BooleanField(
+        default=True,
+        db_index=True,
+        verbose_name="Within Max Distance",
+        help_text="Whether this POI is within the maximum configured distance"
+    )
+
+    # For different preference types (fast, balanced, most_winding)
+    scenic_value_cache = models.FloatField(
+        default=0.0,
+        verbose_name="Cached Scenic Value",
+        help_text="Pre-calculated scenic value for this POI-segment pair"
+    )
+
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Road Segment-POI Relation"
+        verbose_name_plural = "Road Segment-POI Relations"
+        unique_together = [['road_segment', 'poi']]
+        indexes = [
+            models.Index(fields=['road_segment', 'is_within_max_distance', 'scenic_value_cache']),
+            models.Index(fields=['poi', 'is_within_max_distance']),
+            models.Index(fields=['scenic_value_cache']),
+        ]
+
+    def __str__(self):
+        return f"Segment {self.road_segment_id} - POI {self.poi_id} ({self.distance_m:.1f}m)"
