@@ -10,7 +10,7 @@ from rest_framework.response import Response
 
 from routes.models import Route
 
-logger = logging.getLogger(_name_)
+logger = logging.getLogger(__name__)
 
 _all_ = [
     "_validate_coordinates",
