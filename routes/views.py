@@ -93,7 +93,7 @@ class RouteViewSet(viewsets.ModelViewSet):
                 )
             )
         else:
-            # Anonimo: solo percorsi pubblici e non nascosti
+            #only for the public tour or tour not hidden
             return Route.objects.filter(
                 visibility='public',
                 owner__hiddenUntil__isnull=True
@@ -796,9 +796,7 @@ class StopViewSet(viewsets.ModelViewSet):
             return Stop.objects.all()
 
         if user.is_authenticated:
-            # Stops di percorsi:
-            # - di proprietà dell'utente
-            # - pubblici o con link, purché non nascosti
+
             return Stop.objects.filter(
                 Q(route__owner=user) |
                 (
