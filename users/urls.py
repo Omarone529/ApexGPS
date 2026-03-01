@@ -5,20 +5,14 @@ from .jwt import EmailOrUsernameTokenObtainPairSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView
 from .views import RegisterView, MeView, CustomUserViewSet, GoogleLoginView
 
-
 class LoginView(TokenObtainPairView):
-    """
-    Custom login view that accepts either email or username.
-    Returns JWT tokens and user data.
-    """
     serializer_class = EmailOrUsernameTokenObtainPairSerializer
 
-
-# Router for ViewSet
+# Router for the ViewSet
 router = DefaultRouter()
-router.register(r'users', CustomUserViewSet, basename='customuser')
+router.register(r'', CustomUserViewSet, basename='customuser')
 
-# Authentication URLs
+# URL patterns
 urlpatterns = [
     # JWT endpoints
     path('login/', LoginView.as_view(), name='token_obtain_pair'),
@@ -30,6 +24,6 @@ urlpatterns = [
     path('register/', RegisterView.as_view(), name='register'),
     path('me/', MeView.as_view(), name='me'),
 
-    # Include ViewSet URLs (for admin user management)
+
     path('', include(router.urls)),
 ]

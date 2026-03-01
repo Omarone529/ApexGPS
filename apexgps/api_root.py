@@ -19,7 +19,11 @@ class APIRootView(APIView):
                     "google": reverse("google_login", request=request, format=format),
                 },
                 # Users management
-                "users": reverse("customuser-list", request=request, format=format),
+                "users": {
+                    "list": reverse("customuser-list", request=request, format=format),
+                    "ban": reverse("customuser-ban", kwargs={"pk": "1"}, request=request, format=format),
+                    "unban": reverse("customuser-unban", kwargs={"pk": "1"}, request=request, format=format),
+                },
                 # GIS Data
                 "gis_data": {
                     "points-of-interest": reverse(
@@ -50,6 +54,8 @@ class APIRootView(APIView):
                         "route-my-routes", request=request, format=format
                     ),
                     "public": reverse("route-public", request=request, format=format),
+                    "ban": reverse("route-ban", kwargs={"pk": "1"}, request=request, format=format),
+                    "unban": reverse("route-unban", kwargs={"pk": "1"}, request=request, format=format),
                 },
                 # Admin
                 "admin": reverse("admin:index", request=request, format=format),
