@@ -1,3 +1,7 @@
+from datetime import timedelta
+
+from django.utils import timezone
+
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from rest_framework import permissions, status, viewsets
@@ -11,7 +15,7 @@ from .serializers import (
     CustomUserPublicSerializer,
     CustomUserWriteSerializer,
     RegisterSerializer,
-    GoogleAuthSerializer,
+    GoogleAuthSerializer, HiddenUntilSerializer,
 )
 
 
@@ -120,3 +124,31 @@ class CustomUserViewSet(viewsets.ModelViewSet):
         """
         serializer = self.get_serializer(request.user)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdminUser])
+    def ban(self, request, pk=None):
+        """Set hiddenUntil for the user and make all their paths private"""
+        user = self.get_object()
+        serializer = HiddenUntilSerializer(data=request.data)
+        if serializer.is_valid():
+            hidden_until = serializer.validated_data.get('hidden_until')
+            if hidden_until is None:
+                # Default: 14 days
+                hidden_until = timezone.now() + timedelta(days=14)
+            user.hiddenUntil = hidden_until
+            user.save(update_fields=['hiddenUntil'])
+            # forced all user's tours to private
+            user.routes.update(visibility='private')
+            return Response({
+                'status': 'user banned',
+                'hidden_until': user.hiddenUntil
+            }, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['delete'], permission_classes=[IsAdminUser])
+    def unban(self, request, pk=None):
+        """Rimuove il ban (hiddenUntil = null)."""
+        user = self.get_object()
+        user.hiddenUntil = None
+        user.save(update_fields=['hiddenUntil'])
+        return Response({'status': 'user unbanned'})

@@ -4,6 +4,7 @@ import uuid
 from django.contrib.auth import get_user_model
 from django.contrib.gis.geos import Point
 from django.core.files.base import ContentFile
+from django.utils import timezone
 from rest_framework import serializers
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
 import hashlib
@@ -102,6 +103,13 @@ class RouteCreateSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = ["id", "owner_username", "created_at"]
+
+    def validate_visibility(self, value):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            if request.user.hiddenUntil and request.user.hiddenUntil > timezone.now() and value == 'public':
+                raise serializers.ValidationError("Non puoi pubblicare percorsi mentre sei soggetto a restrizioni.")
+        return value
 
     def to_representation(self, instance):
         """Convert PointFields to lat/lon dicts in response."""
@@ -213,6 +221,15 @@ class RouteUpdateSerializer(serializers.ModelSerializer):
             "screenshot",
         ]
 
+    def validate_visibility(self, value):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            # if the banned user try to put public a tour
+            if request.user.hiddenUntil and request.user.hiddenUntil > timezone.now() and value == 'public':
+                raise serializers.ValidationError(
+                    "Non puoi pubblicare percorsi mentre sei soggetto a restrizioni."
+                )
+        return value
     def to_representation(self, instance):
         """Convert PointFields to lat/lon dicts in response."""
         data = super().to_representation(instance)
@@ -279,6 +296,7 @@ class RouteSerializer(serializers.ModelSerializer):
     owner_username = serializers.ReadOnlyField(source="owner.username")
     stops = StopSerializer(many=True, read_only=True)
     stop_count = serializers.IntegerField(source="get_stops_count", read_only=True)
+    hidden_until = serializers.SerializerMethodField()
 
     class Meta:
         """Meta class for Route serializer."""
@@ -302,6 +320,7 @@ class RouteSerializer(serializers.ModelSerializer):
             "updated_at",
             "stops",
             "stop_count",
+            "hidden_until",
         ]
         read_only_fields = [
             "id",
@@ -317,6 +336,12 @@ class RouteSerializer(serializers.ModelSerializer):
             "total_scenic_score",
             "screenshot",
         ]
+
+    def get_hidden_until(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_staff:
+            return obj.hiddenUntil
+        return None
 
     def to_representation(self, instance):
         """Convert PointFields to lat/lon dicts in response."""
@@ -724,6 +749,11 @@ class RouteSaveFromCalculationSerializer(serializers.Serializer):
         """Verify user permissions according to specifications."""
         user = self.context["request"].user
 
+        if user.hiddenUntil and user.hiddenUntil > timezone.now() and data.get("visibility") == "public":
+            raise serializers.ValidationError(
+                "Non puoi pubblicare percorsi mentre sei soggetto a restrizioni."
+            )
+
         if not user.is_authenticated:
             raise serializers.ValidationError(
                 "Devi essere autenticato per salvare un percorso"
@@ -874,4 +904,12 @@ class POIPhotoResponseSerializer(serializers.Serializer):
         allow_blank=True,
         default='',
         help_text='Breve descrizione del luogo da Wikipedia'
+    )
+
+
+class HiddenUntilSerializer(serializers.Serializer):
+    hidden_until = serializers.DateTimeField(
+        allow_null=True,
+        required=False,
+        help_text="Data e ora fino a cui il percorso sarà privato. Null per rimuovere il blocco."
     )
