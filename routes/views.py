@@ -1,6 +1,7 @@
 import os
 import time
 import traceback
+from datetime import timedelta
 
 import requests
 from django.contrib.gis.geos import Point
@@ -112,25 +113,24 @@ class RouteViewSet(viewsets.ModelViewSet):
         else:
             serializer.save()
 
-    # ------------------------------------------------------------------
-    # Custom actions
-    # ------------------------------------------------------------------
 
 
     @action(detail=True, methods=['post'], permission_classes=[IsAdminUser])
     def ban(self, request, pk=None):
-        """Imposta la data di hiddenUntil per il percorso (solo admin)."""
+        """Set the hiddenUntil date for the path (admin only)."""
         route = self.get_object()
         serializer = HiddenUntilSerializer(data=request.data)
         if serializer.is_valid():
-            route.hiddenUntil = serializer.validated_data.get('hidden_until')
+            hidden_until = serializer.validated_data.get('hidden_until')
+            if hidden_until is None:
+                hidden_until = timezone.now() + timedelta(days=14)
+            route.hiddenUntil = hidden_until
             route.save(update_fields=['hiddenUntil'])
             return Response({
-                'status': 'hidden_until aggiornato',
+                'status': 'route banned',
                 'hidden_until': route.hiddenUntil
-            })
+            }, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
     @action(detail=True, methods=['delete'], permission_classes=[IsAdminUser])
     def unban(self, request, pk=None):
         """Rimuove il blocco (hiddenUntil = null)."""

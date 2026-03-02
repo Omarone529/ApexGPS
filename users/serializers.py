@@ -23,7 +23,7 @@ class CustomUserPublicSerializer(serializers.ModelSerializer):
     is_administrator = serializers.BooleanField(read_only=True)
     can_create_routes = serializers.BooleanField(read_only=True)
     can_publish_routes = serializers.BooleanField(read_only=True)
-    hidden_until = serializers.SerializerMethodField()
+    hiddenUntil = serializers.SerializerMethodField()
 
     class Meta:
         """Meta class for CustomUser."""
@@ -42,12 +42,12 @@ class CustomUserPublicSerializer(serializers.ModelSerializer):
             "is_administrator",
             "can_create_routes",
             "can_publish_routes",
-            "hidden_until",
+            "hiddenUntil",
         )
         read_only_fields = ("is_superuser",)
         extra_kwargs = {"password": {"write_only": True}}
 
-    def get_hidden_until(self, obj):
+    def get_hiddenUntil(self, obj):
         request = self.context.get('request')
         if request and request.user.is_staff:
             return obj.hiddenUntil

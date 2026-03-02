@@ -1,3 +1,7 @@
+from datetime import timedelta
+
+from django.utils import timezone
+
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from rest_framework import permissions, status, viewsets
@@ -123,19 +127,23 @@ class CustomUserViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], permission_classes=[IsAdminUser])
     def ban(self, request, pk=None):
-        """Imposta hiddenUntil per l'utente e rende privati tutti i suoi percorsi."""
+        """Set hiddenUntil for the user and make all their paths private"""
         user = self.get_object()
         serializer = HiddenUntilSerializer(data=request.data)
         if serializer.is_valid():
-            user.hiddenUntil = serializer.validated_data.get('hidden_until')
+            hidden_until = serializer.validated_data.get('hidden_until')
+            if hidden_until is None:
+                # Default: 14 days
+                hidden_until = timezone.now() + timedelta(days=14)
+            user.hiddenUntil = hidden_until
             user.save(update_fields=['hiddenUntil'])
-            # Forza tutti i percorsi dell'utente a privati
+            # forced all user's tours to private
             user.routes.update(visibility='private')
             return Response({
                 'status': 'user banned',
                 'hidden_until': user.hiddenUntil
-            })
-        return Response(serializer.errors, status=400)
+            }, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['delete'], permission_classes=[IsAdminUser])
     def unban(self, request, pk=None):
