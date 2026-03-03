@@ -53,6 +53,23 @@ class Route(models.Model):
         blank=True,
         help_text="Punto di arrivo del percorso",
     )
+
+    # Human-readable location names
+    start_location_name = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        verbose_name="Nome partenza",
+        help_text="Nome del punto di partenza",
+    )
+    end_location_name = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        verbose_name="Nome arrivo",
+        help_text="Nome del punto di arrivo",
+    )
+
     preference = models.CharField(
         max_length=20,
         choices=PREFERENCE_CHOICES,
@@ -97,7 +114,7 @@ class Route(models.Model):
         verbose_name="Impronta univoca",
         help_text="Hash dei dati del percorso per rilevare duplicati",
     )
-    #screenshot of the route
+    # screenshot of the route
     screenshot = models.ImageField(
         upload_to='route_screenshots/',
         null=True,
@@ -106,10 +123,10 @@ class Route(models.Model):
         help_text="Immagine statica della mappa con il percorso tracciato"
     )
 
-    hiddenUntil  = models.DateTimeField(
+    hiddenUntil = models.DateTimeField(
         null=True,
         blank=True,
-        verbose_name="hiddenUntil ",
+        verbose_name="hiddenUntil",
         help_text="Data e ora per privatizzazione tour",
     )
 
@@ -222,7 +239,6 @@ class Stop(models.Model):
         return f"Tappa {self.order}"
 
     def save(self, *args, **kwargs):
-
         if self.owner.hiddenUntil and self.owner.hiddenUntil > timezone.now():
             self.visibility = 'private'
         super().save(*args, **kwargs)
