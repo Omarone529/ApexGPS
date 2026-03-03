@@ -99,6 +99,8 @@ class RouteCreateSerializer(serializers.ModelSerializer):
             "preference",
             "start_location",
             "end_location",
+            "start_location_name",
+            "end_location_name",
             "screenshot",
             "created_at",
         ]
@@ -195,6 +197,8 @@ class RouteUpdateSerializer(serializers.ModelSerializer):
             "visibility",
             "start_location",
             "end_location",
+            "start_location_name",
+            "end_location_name",
             "preference",
             "polyline",
             "distance_km",
@@ -310,6 +314,8 @@ class RouteSerializer(serializers.ModelSerializer):
             "visibility",
             "start_location",
             "end_location",
+            "start_location_name",
+            "end_location_name",
             "preference",
             "polyline",
             "distance_km",
@@ -792,6 +798,8 @@ class RouteSaveFromCalculationSerializer(serializers.Serializer):
         # Convert locations from dict to Point
         start_loc = calc_data["start_location"]
         if isinstance(start_loc, dict):
+            if not calc_data.get("start_location_name"):
+                calc_data["start_location_name"] = start_loc.get("name", "")
             try:
                 lat = float(start_loc.get("lat", start_loc.get("y")))
                 lon = float(start_loc.get("lon", start_loc.get("x")))
@@ -804,6 +812,8 @@ class RouteSaveFromCalculationSerializer(serializers.Serializer):
 
         end_loc = calc_data["end_location"]
         if isinstance(end_loc, dict):
+            if not calc_data.get("end_location_name"):
+                calc_data["end_location_name"] = end_loc.get("name", "")
             try:
                 lat = float(end_loc.get("lat", end_loc.get("y")))
                 lon = float(end_loc.get("lon", end_loc.get("x")))
@@ -842,6 +852,8 @@ class RouteSaveFromCalculationSerializer(serializers.Serializer):
             preference=calc_data.get("preference", "balanced"),
             start_location=calc_data["start_location"],
             end_location=calc_data["end_location"],
+            start_location_name=calc_data.get("start_location_name", ""),
+            end_location_name=calc_data.get("end_location_name", ""),
             polyline=calc_data.get("polyline", ""),
             distance_km=calc_data["total_distance_km"],
             estimated_time_min=calc_data["total_time_minutes"],
