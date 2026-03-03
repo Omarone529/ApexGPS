@@ -372,6 +372,8 @@ class RouteViewSet(viewsets.ModelViewSet):
                 response_data["calculation_data"] = {
                     "start_location": {"lat": start_lat, "lon": start_lon},
                     "end_location": {"lat": end_lat, "lon": end_lon},
+                    "start_location_name": start_location_name,
+                    "end_location_name": end_location_name,
                     "waypoints": [
                         {"lat": wp["lat"], "lon": wp["lon"], "name": wp["name"]}
                         for wp in geocoded_waypoints
@@ -565,6 +567,8 @@ class RouteViewSet(viewsets.ModelViewSet):
                 scenic_result["calculation_data"] = {
                     "start_location": {"lat": start_lat, "lon": start_lon},
                     "end_location": {"lat": end_lat, "lon": end_lon},
+                    "start_location_name": start_location_name,
+                    "end_location_name": end_location_name,
                     "preference": preference,
                     "total_distance_km": scenic_route_data.get("total_distance_km", 0),
                     "total_time_minutes": scenic_route_data.get("total_time_minutes", 0),
