@@ -34,7 +34,7 @@ services:
       sh -c "
         sleep 5 &&
         python manage.py migrate &&
-        python manage.py load_operational_dataset --verbose &&
+        python manage.py load_operational_dataset --run-all --dem-resolutions 300 --verbose &&
         python manage.py runserver 0.0.0.0:8000
       "
     environment:
