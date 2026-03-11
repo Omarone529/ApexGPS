@@ -10,40 +10,38 @@ services:
       POSTGRES_DB: ${DB_NAME}
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
-    ports:
-      - "${DB_PORT}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
       interval: 10s
       timeout: 10s
       retries: 20
       start_period: 30s
+    restart: unless-stopped
 
   web:
     platform: linux/amd64
     build: .
     volumes:
-      - .:/app
       - ./dem_data:/dem_data
+      - media_volume:/app/media                # persistent uploads
     ports:
-      - "8000:8000"
+      - "8000:8000"                            # remove later when Traefik is added
     depends_on:
       db:
         condition: service_healthy
-    command: >
-      sh -c "
-        sleep 5 &&
-        python manage.py migrate &&
-        python manage.py load_operational_dataset --verbose &&
-        python manage.py runserver 0.0.0.0:8000
-      "
     environment:
+      # Database
       DB_HOST: ${DB_HOST}
       DB_PORT: ${DB_PORT}
       DB_NAME: ${DB_NAME}
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
+      # Django
       DJANGO_SETTINGS_MODULE: apexgps.settings
+      DEBUG: "False"
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+      # Your custom variables
       OSM_URL: ${OSM_URL}
       OSM_URL_KUMI: ${OSM_URL_KUMI}
       OSM_URL_NCHC: ${OSM_URL_NCHC}
@@ -51,7 +49,6 @@ services:
       LOCAL_PATH1: ${LOCAL_PATH1}
       LOCAL_PATH2: ${LOCAL_PATH2}
       REACT_SERVER: ${REACT_SERVER}
-      CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS}
       INIT_AREA: italy
       NOMINATIM_URL: ${NOMINATIM_URL}
       PYTHONMALLOC: malloc
@@ -60,6 +57,8 @@ services:
       WIKIPEDIA_API_URL: ${WIKIPEDIA_API_URL}
       PIC4CARTO_API_URL: ${PIC4CARTO_API_URL}
       API_USER_AGENT: ${API_USER_AGENT}
+    restart: unless-stopped
 
 volumes:
   pgdata:
+  media_volume:
