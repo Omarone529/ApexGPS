@@ -157,8 +157,8 @@ class PointOfInterest(models.Model):
             "default": 1.0,
         }
         return (
-            scenic_weights.get(self.category, scenic_weights["default"])
-            * self.importance_score
+                scenic_weights.get(self.category, scenic_weights["default"])
+                * self.importance_score
         )
 
 
@@ -263,6 +263,131 @@ class ScenicArea(models.Model):
         bonus = 1.0 + ((self.bonus_value - 1.0) * coverage_ratio)
 
         return bonus
+
+class City(models.Model):
+    """
+    Italian municipalities (comuni) with administrative boundaries.
+    Each city belongs to a region and province.
+    Used for location search and reverse geocoding.
+    """
+
+    name = models.CharField(
+        max_length=100,
+        verbose_name="Nome Comune",
+        help_text="Nome ufficiale del comune",
+        db_index=True,
+    )
+
+    province = models.CharField(
+        max_length=100,
+        verbose_name="Provincia",
+        help_text="Nome della provincia di appartenenza",
+        blank=True,
+        null=True,
+    )
+
+    province_code = models.CharField(
+        max_length=2,
+        verbose_name="Sigla Provincia",
+        help_text="Sigla automobilistica della provincia (es. RM, MI, NA)",
+        blank=True,
+        null=True,
+    )
+
+    region = models.CharField(
+        max_length=50,
+        verbose_name="Regione",
+        help_text="Regione italiana di appartenenza (corrisponde a OSMConfig.ALL_REGIONS)",
+        db_index=True,
+    )
+
+    istat_code = models.CharField(
+        max_length=10,
+        verbose_name="Codice ISTAT",
+        help_text="Codice ISTAT ufficiale del comune",
+        unique=True,
+        null=True,
+        blank=True,
+    )
+
+    location = models.PointField(
+        srid=4326,
+        verbose_name="Centro Città",
+        help_text="Coordinate del centro città (di solito il municipio)",
+    )
+
+    geometry = models.MultiPolygonField(
+        srid=4326,
+        verbose_name="Confini Comunali",
+        help_text="Confini amministrativi del comune",
+        null=True,
+        blank=True,
+    )
+
+    population = models.IntegerField(
+        verbose_name="Popolazione",
+        help_text="Numero di abitanti (fonte ISTAT)",
+        null=True,
+        blank=True,
+    )
+
+    elevation = models.FloatField(
+        verbose_name="Altitudine (m)",
+        help_text="Altitudine sul livello del mare in metri",
+        null=True,
+        blank=True,
+    )
+
+    osm_id = models.BigIntegerField(
+        verbose_name="ID OpenStreetMap",
+        help_text="Identificativo originale da OpenStreetMap",
+        unique=True,
+        null=True,
+        blank=True,
+    )
+
+    # Timestamps
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name="Data creazione",
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        verbose_name="Data aggiornamento",
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name="Attivo",
+        help_text="Indica se il comune è attivo per le ricerche",
+    )
+
+    class Meta:
+        verbose_name = "Comune"
+        verbose_name_plural = "Comuni"
+        indexes = [
+            models.Index(fields=["name"]),
+            models.Index(fields=["region"]),
+            models.Index(fields=["province"]),
+            models.Index(fields=["province_code"]),
+            models.Index(fields=["istat_code"]),
+            models.Index(fields=["location"]),
+        ]
+        ordering = ["name"]
+
+    def __str__(self):
+        """Return string representation."""
+        if self.province_code:
+            return f"{self.name} ({self.province_code})"
+        return self.name
+
+    @property
+    def display_name(self):
+        """Return display name for search results."""
+        if self.province_code:
+            return f"{self.name}, {self.province_code}"
+        return self.name
 
 
 class RoadSegment(models.Model):
@@ -657,15 +782,15 @@ class RoadSegmentNoded(models.Model):
 
     # pgRouting v4.0 topology
     source = models.BigIntegerField(
-        null = True,
-        blank = True,
+        null=True,
+        blank=True,
         db_index=True,
         verbose_name="Nodo di Partenza",
     )
 
     target = models.BigIntegerField(
-        null = True,
-        blank = True,
+        null=True,
+        blank=True,
         db_index=True,
         verbose_name="Nodo di Arrivo",
     )
@@ -684,7 +809,6 @@ class RoadSegmentNoded(models.Model):
                 self.x1, self.y1 = coords[0]  # Start point
                 self.x2, self.y2 = coords[-1]  # End point
         super().save(*args, **kwargs)
-
 
     class Meta:
         verbose_name = "Segmento Stradale (Noded)"
