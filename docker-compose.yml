@@ -57,6 +57,12 @@ services:
       WIKIPEDIA_API_URL: ${WIKIPEDIA_API_URL}
       PIC4CARTO_API_URL: ${PIC4CARTO_API_URL}
       API_USER_AGENT: ${API_USER_AGENT}
+    command: >
+      sh -c "
+        python manage.py migrate &&
+        python manage.py load_operational_dataset --verbose &&
+        gunicorn --bind 0.0.0.0:8000 apexgps.wsgi:application
+      "
     restart: unless-stopped
 
 volumes:
