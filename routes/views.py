@@ -6,7 +6,7 @@ from datetime import timedelta
 import requests
 from django.contrib.gis.geos import Point
 from django.core.cache import cache
-from django.db import models
+from django.db import connection
 from django_filters.rest_framework import DjangoFilterBackend
 from django.utils import timezone
 from django.db.models import Q
@@ -103,8 +103,6 @@ class RouteViewSet(viewsets.ModelViewSet):
                 owner__hiddenUntil__lte=now
             )
 
-
-
     def perform_create(self, serializer):
         """Perform route creation with automatic owner assignment."""
         user = self.request.user
@@ -112,8 +110,6 @@ class RouteViewSet(viewsets.ModelViewSet):
             serializer.save(owner=user)
         else:
             serializer.save()
-
-
 
     @action(detail=True, methods=['post'], permission_classes=[IsAdminUser])
     def ban(self, request, pk=None):
@@ -131,6 +127,7 @@ class RouteViewSet(viewsets.ModelViewSet):
                 'hidden_until': route.hiddenUntil
             }, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
     @action(detail=True, methods=['delete'], permission_classes=[IsAdminUser])
     def unban(self, request, pk=None):
         """Rimuove il blocco (hiddenUntil = null)."""
@@ -800,7 +797,6 @@ class StopViewSet(viewsets.ModelViewSet):
             return Stop.objects.all()
 
         if user.is_authenticated:
-
             return Stop.objects.filter(
                 Q(route__owner=user) |
                 (
@@ -850,61 +846,258 @@ class StopViewSet(viewsets.ModelViewSet):
 @permission_classes([AllowAny])
 def geocode_search(request):
     """
-    Search for locations by name.
+    Search for locations by name in local database (cities, POIs, roads, stops) with Nominatim fallback.
     Returns a list of matches with coordinates and display names.
     """
     query = request.GET.get("q", "").strip()
-    limit = int(request.GET.get("limit", 5))
+    limit = int(request.GET.get("limit", 15))
 
     if len(query) < 2:
         return Response([])
 
+    suggestions = []
+    seen_keys = set()
+    start_time = time.time()
+
     try:
-        base_url = GeocodingService._get_nominatim_url()
-        params = {
-            "q": query,
-            "format": "json",
-            "limit": limit,
-            "countrycodes": "it",
-            "accept-language": "it",
-            "addressdetails": 1,
-        }
-        response = requests.get(
-            f"{base_url}/search",
-            params=params,
-            headers={"User-Agent": "ApexGPS/1.0"},
-            timeout=15,
-        )
+        # Cities
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_name = 'gis_data_city'
+                )
+            """)
+            has_cities = cursor.fetchone()[0]
 
-        if response.status_code != 200:
-            return Response([])
+            if has_cities:
+                cursor.execute("""
+                    SELECT name, 
+                        ST_X(location) as lon,
+                        ST_Y(location) as lat,
+                        province_code,
+                        population
+                    FROM gis_data_city
+                    WHERE is_active = true
+                      AND name IS NOT NULL 
+                      AND name != ''
+                      AND LOWER(name) LIKE LOWER(%s)
+                    ORDER BY 
+                        CASE 
+                            WHEN LOWER(name) = LOWER(%s) THEN 0
+                            WHEN LOWER(name) LIKE LOWER(%s) THEN 1
+                            ELSE 2
+                        END,
+                        population DESC NULLS LAST,
+                        name
+                    LIMIT %s
+                """, [f'{query}%', query, f'{query}%', limit])
 
-        results = []
-        for item in response.json():
-            item_id = f"osm_{item.get('osm_id', '')}_{item.get('osm_type', 'node')}"
+                for row in cursor.fetchall():
+                    name, lon, lat, province, population = row
+                    key = f"city_{name}_{province}"
+                    if key not in seen_keys:
+                        seen_keys.add(key)
+                        display_name = name
+                        if province:
+                            display_name += f" ({province})"
 
-            location_type = item.get("type", "location")
-            address = item.get("address", {})
-            for key in ("city", "town", "village", "hamlet"):
-                if key in address:
-                    location_type = key
-                    break
+                        suggestions.append({
+                            'id': f"city_{abs(hash(name))}",
+                            'display_name': display_name,
+                            'lat': float(lat),
+                            'lon': float(lon),
+                            'type': 'city',
+                            'importance': 0.95,
+                            'source': 'database'
+                        })
 
-            results.append({
-                "id": item_id,
-                "display_name": item.get("display_name", ""),
-                "lat": float(item["lat"]),
-                "lon": float(item["lon"]),
-                "type": location_type,
-                "importance": item.get("importance", 0.5),
-            })
+        # POI
+        if len(suggestions) < limit:
+            remaining = limit - len(suggestions)
+            with connection.cursor() as cursor:
+                cursor.execute("""
+                    SELECT name, 
+                        ST_X(location) as lon,
+                        ST_Y(location) as lat,
+                        category,
+                        importance_score,
+                        region
+                    FROM gis_data_pointofinterest 
+                    WHERE is_active = true
+                      AND name IS NOT NULL 
+                      AND name != ''
+                      AND LOWER(name) LIKE LOWER(%s)
+                    ORDER BY 
+                        CASE 
+                            WHEN LOWER(name) = LOWER(%s) THEN 0
+                            WHEN LOWER(name) LIKE LOWER(%s) THEN 1
+                            ELSE 2
+                        END,
+                        importance_score DESC NULLS LAST,
+                        name
+                    LIMIT %s
+                """, [f'{query}%', query, f'{query}%', remaining])
 
-        results.sort(key=lambda x: x["importance"], reverse=True)
-        return Response(GeocodeSearchResultSerializer(results, many=True).data)
+                for row in cursor.fetchall():
+                    name, lon, lat, category, importance, region = row
+                    key = f"poi_{name}_{region}"
+                    if key not in seen_keys:
+                        seen_keys.add(key)
+
+                        suggestions.append({
+                            'id': f"poi_{abs(hash(name))}",
+                            'display_name': name,
+                            'lat': float(lat),
+                            'lon': float(lon),
+                            'type': category or 'poi',
+                            'importance': float(importance) if importance else 0.9,
+                            'region': region,
+                            'source': 'database'
+                        })
+
+        # Roads
+        if len(suggestions) < limit:
+            remaining = limit - len(suggestions)
+            with connection.cursor() as cursor:
+                cursor.execute("""
+                    SELECT DISTINCT name, 
+                        ST_X(ST_StartPoint(geometry)) as lon,
+                        ST_Y(ST_StartPoint(geometry)) as lat,
+                        highway,
+                        scenic_rating,
+                        region
+                    FROM gis_data_roadsegment 
+                    WHERE is_active = true
+                      AND name IS NOT NULL 
+                      AND name != ''
+                      AND LOWER(name) LIKE LOWER(%s)
+                    ORDER BY 
+                        CASE 
+                            WHEN LOWER(name) = LOWER(%s) THEN 0
+                            WHEN LOWER(name) LIKE LOWER(%s) THEN 1
+                            ELSE 2
+                        END,
+                        scenic_rating DESC NULLS LAST,
+                        name
+                    LIMIT %s
+                """, [f'{query}%', query, f'{query}%', remaining])
+
+                for row in cursor.fetchall():
+                    name, lon, lat, highway, rating, region = row
+                    key = f"road_{name}_{region}"
+                    if key not in seen_keys:
+                        seen_keys.add(key)
+
+                        suggestions.append({
+                            'id': f"road_{abs(hash(name))}",
+                            'display_name': name,
+                            'lat': float(lat),
+                            'lon': float(lon),
+                            'type': highway or 'road',
+                            'importance': 0.7 + (float(rating) * 0.03 if rating else 0),
+                            'region': region,
+                            'source': 'database'
+                        })
+
+        # Stops from public routes
+        if len(suggestions) < limit:
+            remaining = limit - len(suggestions)
+            with connection.cursor() as cursor:
+                cursor.execute("""
+                    SELECT s.name,
+                        ST_X(s.location) as lon,
+                        ST_Y(s.location) as lat,
+                        r.name as route_name
+                    FROM routes_stop s
+                    JOIN routes_route r ON s.route_id = r.id
+                    WHERE s.name IS NOT NULL 
+                      AND s.name != ''
+                      AND r.visibility = 'public'
+                      AND LOWER(s.name) LIKE LOWER(%s)
+                    ORDER BY 
+                        CASE 
+                            WHEN LOWER(s.name) = LOWER(%s) THEN 0
+                            WHEN LOWER(s.name) LIKE LOWER(%s) THEN 1
+                            ELSE 2
+                        END,
+                        s.name
+                    LIMIT %s
+                """, [f'{query}%', query, f'{query}%', remaining])
+
+                for row in cursor.fetchall():
+                    name, lon, lat, route_name = row
+                    key = f"stop_{name}_{route_name}"
+                    if key not in seen_keys:
+                        seen_keys.add(key)
+                        display_name = name
+                        if route_name:
+                            display_name += f" (tappa)"
+
+                        suggestions.append({
+                            'id': f"stop_{abs(hash(name))}",
+                            'display_name': display_name,
+                            'lat': float(lat),
+                            'lon': float(lon),
+                            'type': 'stop',
+                            'importance': 0.8,
+                            'source': 'database'
+                        })
+
+        logger.info(f"Found {len(suggestions)} database suggestions for '{query}' in {time.time() - start_time:.3f}s")
 
     except Exception as e:
-        logger.error(f"Geocode search error: {e}")
-        return Response([])
+        logger.error(f"Database search error: {e}")
+
+    # Nominatim fallback
+    if len(suggestions) < 5:
+        try:
+            remaining = 10 - len(suggestions)
+            base_url = GeocodingService._get_nominatim_url()
+            params = {
+                "q": query,
+                "format": "json",
+                "limit": remaining,
+                "countrycodes": "it",
+                "accept-language": "it",
+                "addressdetails": 1,
+            }
+            response = requests.get(
+                f"{base_url}/search",
+                params=params,
+                headers={"User-Agent": "ApexGPS/1.0"},
+                timeout=5,
+            )
+
+            if response.status_code == 200:
+                for item in response.json():
+                    display_name = item.get("display_name", "")
+                    if display_name and display_name not in seen_keys:
+                        seen_keys.add(display_name)
+
+                        item_id = f"osm_{item.get('osm_id', '')}_{item.get('osm_type', 'node')}"
+                        location_type = item.get("type", "location")
+
+                        suggestions.append({
+                            "id": item_id,
+                            "display_name": display_name,
+                            "lat": float(item["lat"]),
+                            "lon": float(item["lon"]),
+                            "type": location_type,
+                            "importance": item.get("importance", 0.5),
+                            'source': 'nominatim'
+                        })
+
+        except Exception as e:
+            logger.error(f"Nominatim fallback error: {e}")
+
+    # Sort results. DB first, then Nominatim
+    suggestions.sort(key=lambda x: (
+        0 if x.get('source') == 'database' else 1,
+        -x.get('importance', 0.5)
+    ))
+
+    return Response(GeocodeSearchResultSerializer(suggestions, many=True).data)
 
 
 @api_view(["GET"])
