@@ -157,8 +157,8 @@ class PointOfInterest(models.Model):
             "default": 1.0,
         }
         return (
-                scenic_weights.get(self.category, scenic_weights["default"])
-                * self.importance_score
+            scenic_weights.get(self.category, scenic_weights["default"])
+            * self.importance_score
         )
 
 
@@ -266,7 +266,7 @@ class ScenicArea(models.Model):
 
 class City(models.Model):
     """
-    Italian municipalities (comuni) with administrative boundaries.
+    Italian municipalities with administrative boundaries.
     Each city belongs to a region and province.
     Used for location search and reverse geocoding.
     """
@@ -782,15 +782,15 @@ class RoadSegmentNoded(models.Model):
 
     # pgRouting v4.0 topology
     source = models.BigIntegerField(
-        null=True,
-        blank=True,
+        null = True,
+        blank = True,
         db_index=True,
         verbose_name="Nodo di Partenza",
     )
 
     target = models.BigIntegerField(
-        null=True,
-        blank=True,
+        null = True,
+        blank = True,
         db_index=True,
         verbose_name="Nodo di Arrivo",
     )
@@ -809,6 +809,7 @@ class RoadSegmentNoded(models.Model):
                 self.x1, self.y1 = coords[0]  # Start point
                 self.x2, self.y2 = coords[-1]  # End point
         super().save(*args, **kwargs)
+
 
     class Meta:
         verbose_name = "Segmento Stradale (Noded)"
