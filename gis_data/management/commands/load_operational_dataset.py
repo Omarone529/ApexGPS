@@ -1,3 +1,4 @@
+# gis_data/management/commands/load_operational_dataset.py
 import gc
 import logging
 import time
@@ -7,7 +8,7 @@ from django.core.management import call_command
 from django.core.management.base import BaseCommand
 from django.db import connection, transaction
 
-from gis_data.models import RoadSegment, PointOfInterest
+from gis_data.models import RoadSegment, PointOfInterest, City
 from gis_data.utils.osm_utils import (
     OSMAPIClient,
     OSMConfig,
@@ -169,10 +170,59 @@ class RegionalRoadImporter:
             return saved
 
 
-class Command(BaseCommand):
-    """Import complete region: roads, POIs, routing topology."""
+class CityImporter:
+    """Import cities for regions."""
 
-    help = "Import a complete region with roads, POIs and routing topology"
+    def __init__(self):
+        self.stats = {
+            "imported": 0,
+            "skipped": 0,
+            "errors": 0
+        }
+
+    def import_region(self, region: str) -> dict:
+        """Import cities for a specific region."""
+        logger.info(f"Importing cities for region: {region}")
+
+        try:
+            call_command(
+                "import_osm_cities",
+                region=region,
+                verbose=False
+            )
+
+            # Count imported cities
+            city_count = City.objects.filter(region=region).count()
+            self.stats["imported"] = city_count
+
+            return {
+                "success": True,
+                "region": region,
+                "imported": city_count
+            }
+
+        except Exception as e:
+            logger.error(f"City import failed for {region}: {e}")
+            return {
+                "success": False,
+                "region": region,
+                "error": str(e)
+            }
+
+    def import_all_regions(self):
+        """Import cities for all regions."""
+        results = []
+        for region in OSMConfig.ALL_REGIONS:
+            result = self.import_region(region)
+            results.append(result)
+            time.sleep(2)
+        return results
+
+
+class Command(BaseCommand):
+    """Import complete region: roads, POIs, cities and routing topology."""
+
+    help = "Import a complete region with roads, POIs, cities and routing topology"
 
     def add_arguments(self, parser):
         """Add command arguments."""
@@ -210,11 +260,16 @@ class Command(BaseCommand):
             action="store_true",
             help="Show current import status without importing",
         )
+        parser.add_argument(
+            "--skip-cities",
+            action="store_true",
+            help="Skip city import",
+        )
 
     def get_next_region(self):
         """
         Determine the next region to import by checking the database directly.
-        A region is considered "complete" if it has roads AND POIs.
+        A region is considered "complete" if it has roads, POIs AND cities.
         """
         priority_order = [
             "umbria", "valle_daosta", "molise", "basilicata",
@@ -229,9 +284,11 @@ class Command(BaseCommand):
         for region in priority_order:
             road_count = RoadSegment.objects.filter(region=region).count()
             poi_count = PointOfInterest.objects.filter(region=region).count()
+            city_count = City.objects.filter(region=region).count()
 
             has_roads = road_count > 50
             has_pois = poi_count > 0
+            has_cities = city_count > 5  # At least some cities
 
             if not has_roads:
                 logger.info(f"Region {region}: no roads (or <50), selected")
@@ -239,8 +296,11 @@ class Command(BaseCommand):
             elif not has_pois:
                 logger.info(f"Region {region}: roads present ({road_count}) but no POIs, selected")
                 return region
+            elif not has_cities:
+                logger.info(f"Region {region}: roads+POIs present but no cities, selected")
+                return region
             else:
-                logger.info(f"Region {region}: complete ({road_count} roads, {poi_count} POIs)")
+                logger.info(f"Region {region}: complete ({road_count} roads, {poi_count} POIs, {city_count} cities)")
 
         logger.info("All regions are complete!")
         return None
@@ -317,8 +377,27 @@ class Command(BaseCommand):
             else:
                 self.stdout.write("No POIs were imported for this region")
 
-        # Step 3: Prepare GIS topology
-        self.stdout.write("\n3. Preparing routing topology...")
+        # Step 3: Import Cities
+        if not options["skip_cities"]:
+            self.stdout.write("\n3. Importing cities...")
+            try:
+                city_start = time.time()
+                city_importer = CityImporter()
+                city_result = city_importer.import_region(region_to_import)
+                city_time = time.time() - city_start
+
+                if city_result["success"]:
+                    self.stdout.write(f"Imported {city_result['imported']} cities in {city_time:.1f}s")
+                else:
+                    self.stderr.write(f"WARNING: City import issue: {city_result.get('error')}")
+
+            except Exception as e:
+                self.stderr.write(f"WARNING: Error importing cities: {str(e)[:100]}")
+        else:
+            self.stdout.write("\n3. Skipping cities (--skip-cities)")
+
+        # Step 4: Prepare GIS topology
+        self.stdout.write("\n4. Preparing routing topology...")
         try:
             gis_start = time.time()
             call_command(
@@ -332,10 +411,10 @@ class Command(BaseCommand):
                 self.stderr.write("SYSTEM NOT READY FOR ROUTING")
                 raise SystemExit(1) from e
 
-        # Step 4: Final verification
-        self.stdout.write("\n4. Final verification...")
+        self.stdout.write("\n5. Final verification...")
         final_road_count = RoadSegment.objects.filter(region=region_to_import).count()
         final_poi_count = PointOfInterest.objects.filter(region=region_to_import).count()
+        final_city_count = City.objects.filter(region=region_to_import).count()
         has_topology = self.check_topology_exists()
 
         self.stdout.write("\n" + "=" * 60)
@@ -344,6 +423,7 @@ class Command(BaseCommand):
         self.stdout.write(f"Region: {region_to_import.upper()}")
         self.stdout.write(f"Roads imported: {final_road_count:,}")
         self.stdout.write(f"POIs imported: {final_poi_count:,}")
+        self.stdout.write(f"Cities imported: {final_city_count:,}")
         self.stdout.write(f"Topology: {'PRESENT' if has_topology else 'ABSENT'}")
 
         if final_road_count > 50 and has_topology:
@@ -359,7 +439,7 @@ class Command(BaseCommand):
         return True
 
     def show_import_status(self):
-        """Show import status for all regions."""
+        """Show import status for all regions including cities."""
         priority_order = [
             "umbria", "valle_daosta", "molise", "basilicata",
             "friuli-venezia_giulia", "trentino-alto_adige", "marche",
@@ -368,41 +448,52 @@ class Command(BaseCommand):
             "lombardia", "sicilia", "sardegna",
         ]
 
-        self.stdout.write("\n" + "=" * 60)
-        self.stdout.write("REGION IMPORT STATUS")
-        self.stdout.write("=" * 60)
+        self.stdout.write("\n" + "=" * 80)
+        self.stdout.write("REGION IMPORT STATUS (with Cities)")
+        self.stdout.write("=" * 80)
+        self.stdout.write(f"{'Region':20} {'Roads':>10} {'POIs':>8} {'Cities':>8} {'Status':>15}")
+        self.stdout.write("-" * 80)
 
         total_complete = 0
 
         for region in priority_order:
             road_count = RoadSegment.objects.filter(region=region).count()
             poi_count = PointOfInterest.objects.filter(region=region).count()
+            city_count = City.objects.filter(region=region).count()
 
             has_roads = road_count > 50
             has_pois = poi_count > 0
+            has_cities = city_count > 5
 
-            if has_roads and has_pois:
+            if has_roads and has_pois and has_cities:
                 marker = "✓"
                 total_complete += 1
-                status = "complete"
+                status = "COMPLETE"
+            elif has_roads and has_pois and not has_cities:
+                marker = "◔"
+                status = "NEEDS CITIES"
             elif has_roads and not has_pois:
                 marker = "◔"
-                status = "roads only"
-            elif not has_roads and has_pois:
-                marker = "◔"
-                status = "POIs only"
+                status = "NEEDS POIs"
+            elif not has_roads:
+                marker = "○"
+                status = "NEEDS ROADS"
             else:
                 marker = "○"
-                status = "not imported"
+                status = "EMPTY"
 
             self.stdout.write(
-                f"{marker} {region:20} : {status:12} - "
-                f"{road_count:6,} roads, {poi_count:4,} POIs"
+                f"{marker} {region:18} "
+                f"{road_count:10,} "
+                f"{poi_count:8,} "
+                f"{city_count:8,} "
+                f"{status:>15}"
             )
 
-        self.stdout.write("-" * 60)
+        self.stdout.write("-" * 80)
         self.stdout.write(f"Complete regions: {total_complete}/{len(priority_order)}")
-        self.stdout.write("=" * 60)
+        self.stdout.write(f"Topology: {'✓ PRESENT' if self.check_topology_exists() else '○ MISSING'}")
+        self.stdout.write("=" * 80)
 
     def import_all_regions(self, options):
         """Import all regions in sequence."""
@@ -436,7 +527,7 @@ class Command(BaseCommand):
             logging.basicConfig(level=logging.INFO)
 
         self.stdout.write("=" * 60)
-        self.stdout.write("COMPLETE REGION IMPORT")
+        self.stdout.write("COMPLETE REGION IMPORT (with Cities)")
         self.stdout.write("=" * 60)
 
         if options["show_status"]:
