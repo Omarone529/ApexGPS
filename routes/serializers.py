@@ -894,6 +894,8 @@ class GeocodeSearchResultSerializer(serializers.Serializer):
     lon = serializers.FloatField()
     type = serializers.CharField()
     importance = serializers.FloatField(required=False, default=0.5)
+    region = serializers.CharField(required=False, allow_blank=True, default='')
+    source = serializers.CharField(required=False, read_only=True, default='database')
 
 class POIPhotoSerializer(serializers.Serializer):
     """Serializer for individual POI photos."""
