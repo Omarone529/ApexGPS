@@ -172,6 +172,8 @@ class RegionalRoadImporter:
 class Command(BaseCommand):
     """Import complete region: roads, POIs, routing topology, POI relations, and DEM data."""
 
+    DEFAULT_REGIONS = ["umbria", "toscana", "marche"]
+
     help = "Import a complete region with roads, POIs, routing topology, POI relations and DEM data"
 
     def add_arguments(self, parser):
@@ -613,5 +615,8 @@ class Command(BaseCommand):
                 self.show_import_status()
                 return
 
-        self.import_single_region(region_to_import, options)
+        default_regions = ["umbria", "toscana", "marche"]
+        self.stdout.write("Nessuna opzione specificata. Importazione predefinita di: " + ", ".join(default_regions))
+        for region in default_regions:
+            self.import_single_region(region, options)
         self.show_import_status()
