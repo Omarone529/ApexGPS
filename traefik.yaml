@@ -1,0 +1,48 @@
+global:
+  sendAnonymousUsage: false
+
+providers:
+  docker:
+    endpoint: "http://docker-socket:2375"
+    watch: true
+    exposedByDefault: false
+    network: proxy_shared
+
+  file:
+    filename: /etc/traefik/config.yaml
+    watch: true
+
+# Uncomment for DEBUG logs
+# log:
+#   level: DEBUG
+
+entryPoints:
+  http:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: https
+          scheme: https
+  https:
+    address: ":443"
+    http:
+      tls: {}
+      # If you need to allow special characters in URLs, uncomment the following:
+      encodedCharacters:
+        allowEncodedSlash: true
+        allowEncodedBackSlash: true
+        allowEncodedNullCharacter: true
+        allowEncodedSemicolon: true
+        allowEncodedPercent: true
+        allowEncodedQuestionMark: true
+        allowEncodedHash: true
+
+certificatesResolvers:
+  le:
+    acme:
+      email: "omarlucky0@gmail.com"
+      storage: "/letsencrypt/acme.json"
+      # Use staging server for testing (uncomment to avoid rate limits)
+      # caServer: "https://acme-staging-v02.api.letsencrypt.org/directory"
+      tlsChallenge: {}

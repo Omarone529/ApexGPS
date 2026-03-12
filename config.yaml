@@ -1,0 +1,26 @@
+http:
+  middlewares:
+    buffering:
+      buffering:
+        retryExpression: IsNetworkError() && Attempts() < 5
+
+    compress:
+      compress: {}
+
+    secure:
+      headers:
+        forceSTSHeader: true
+        sslRedirect: true
+
+    nocrawlers:
+      headers:
+        customResponseHeaders:
+          X-Robots-Tag: "noindex, nofollow"
+
+    standard:
+      chain:
+        middlewares:
+          - buffering
+          - compress
+          - secure
+          - nocrawlers
