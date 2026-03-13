@@ -331,6 +331,64 @@ class Command(BaseCommand):
                 return False
             return True
 
+    def _import_roads_pois (self, region: str, options: dict) -> bool:
+        """Imports roads and POIs for a single region.
+        Returns True if the road import was successful. """
+        importer = RegionalRoadImporter(batch_size=options["batch_size"])
+        start_time = time.time()
+        road_result = importer.import_region(region, clear_existing=False)
+        road_time = time.time() - start_time
+
+        if not road_result["success"]:
+            self.stderr.write(f"ERROR importing roads for {region}: {road_result.get('error', 'Unknown')}")
+            return False
+
+        segments_saved = road_result["segments_saved"]
+        self.stdout.write(f"Imported {segments_saved:,} roads for {region} in {road_time:.1f}s")
+        try:
+            poi_start = time.time()
+            call_command(
+                "import_osm_pois",
+                area=region,
+                region=region,
+                categories="viewpoint,restaurant,church,historic",
+                verbose=options["verbose"],
+            )
+            poi_time = time.time() - poi_start
+            poi_count = PointOfInterest.objects.filter(region=region).count()
+            self.stdout.write(f"Imported {poi_count:,} POIs for {region} in {poi_time:.1f}s")
+        except Exception as e:
+            self.stderr.write(f"WARNING: Error importing POIs for {region}: {str(e)[:100]}")
+            # POI failure does not block further processing
+        return True
+
+    def _post_process_region(self, region: str, options: dict) -> None:
+        """Performs post-road operations for a region: POI and DEM relations."""
+        # POI Relations
+        if not options["skip_poi_relations"]:
+            self.stdout.write(f"  Pre-computing POI relations for {region}...")
+            try:
+                rel_start = time.time()
+                call_command(
+                    "precompute_poi_relations",
+                    region=region,
+                    max_distance=2500,
+                    verbose=options["verbose"],
+                )
+                rel_time = time.time() - rel_start
+                rel_count = RoadSegmentPOIRelation.objects.filter(
+                    road_segment__region=region
+                ).count()
+                self.stdout.write(f"  Created {rel_count:,} POI relations in {rel_time:.1f}s")
+            except Exception as e:
+                self.stderr.write(f"  WARNING: Error pre-computing POI relations for {region}: {str(e)[:100]}")
+                # If an error occurs, continue (unless skip_on_error is used, but there is no abort)
+        # DEM
+        self.stdout.write(f"  Preparing DEM data for {region}...")
+        dem_success = self.prepare_dem_for_region(region, options)
+        if not dem_success and not options["skip_on_error"]:
+            self.stderr.write(f"  DEM preparation failed for {region}")
+
     def import_single_region(self, region_to_import, options):
         """Import a single region completely."""
         self.stdout.write(f"\n{'=' * 60}")
@@ -590,33 +648,71 @@ class Command(BaseCommand):
         self.stdout.write("COMPLETE REGION IMPORT - ROADS, POIS, TOPOLOGY, RELATIONS, DEM")
         self.stdout.write("=" * 70)
 
+        # Show status only
         if options["show_status"]:
             self.show_import_status()
             return
 
+        # Import all remaining regions (priority-based)
         if options["run_all"]:
             self.import_all_regions(options)
             return
 
-        if self.check_topology_exists() and not options["clear"]:
-            self.stdout.write("INFO: Topology already present")
-            self.stdout.write("System ready for routing")
+        # Import a specific region (keeps original behavior)        if options["force_region"]:
+            region_to_import = options["force_region"]
+            self.stdout.write(f"Force importing region: {region_to_import}")
+            self.import_single_region(region_to_import, options)
             self.show_import_status()
             return
 
-        if options["force_region"]:
-            region_to_import = options["force_region"]
-            self.stdout.write(f"Force importing region: {region_to_import}")
-        else:
-            region_to_import = self.get_next_region()
+        # --- DEFAULT BEHAVIOR: Umbria, Tuscany, Marche ---
+        default_regions = self.DEFAULT_REGIONS
+        self.stdout.write(f"Default import of regions: {', '.join(default_regions)}")
 
-            if not region_to_import:
-                self.stdout.write("INFO: All regions are already complete")
-                self.show_import_status()
-                return
+        # Global delete if requested (roads only, as in the original)
+        if options["clear"]:
+            self.stdout.write("Clearing all existing road segments...")
+            deleted = RoadSegment.objects.all().delete()[0]
+            self.stdout.write(f"Deleted {deleted} road segments.")
 
-        default_regions = ["umbria", "toscana", "marche"]
-        self.stdout.write("Nessuna opzione specificata. Importazione predefinita di: " + ", ".join(default_regions))
+        # Phase 1: Import roads and POIs for each region
+        successful_regions = []
         for region in default_regions:
-            self.import_single_region(region, options)
+            self.stdout.write(f"\n--- Processing region: {region} (roads & POIs) ---")
+            success = self._import_roads_pois(region, options)
+            if success:
+                successful_regions.append(region)
+            elif not options["skip_on_error"]:
+                self.stderr.write(f"Aborting due to error in region {region}")
+                return
+            else:
+                self.stdout.write(f"Continuing despite error in region {region}")
+
+        if not successful_regions:
+            self.stdout.write("No regions successfully imported roads. Exiting.")
+            return
+
+        # Phase 2: Creating routing topology (once for all imported roads)
+        self.stdout.write("\n--- Preparing routing topology for all imported roads ---")
+        try:
+            gis_start = time.time()
+            call_command(
+                "prepare_gis_data",
+                area="italy",
+                force=True,
+                verbose=options["verbose"]
+            )
+            gis_time = time.time() - gis_start
+            self.stdout.write(f"Topology created in {gis_time:.1f}s")
+        except Exception as e:
+            self.stderr.write(f"CRITICAL ERROR preparing GIS: {str(e)[:100]}")
+            if not options["skip_on_error"]:
+                raise SystemExit(1) from e
+
+        # Phase 3: POI and DEM reports for each successful region
+        for region in successful_regions:
+            self.stdout.write(f"\n--- Post-processing region: {region} (relations & DEM) ---")
+            self._post_process_region(region, options)
+
+
         self.show_import_status()
