@@ -28,8 +28,14 @@ class PointOfInterestSerializer(serializers.ModelSerializer):
             "description",
             "latitude",
             "longitude",
+            "region",
+            "importance_score",
+            "is_verified",
+            "is_active",
+            "created_at",
+            "updated_at",
         ]
-        read_only_fields = ["id"]
+        read_only_fields = ["id", "created_at", "updated_at"]
         extra_kwargs = {"location": {"required": False, "write_only": True}}
 
     def validate(self, data):
@@ -44,7 +50,7 @@ class PointOfInterestSerializer(serializers.ModelSerializer):
         if latitude is not None and longitude is not None:
             return data
         if (latitude is not None and longitude is None) or (
-            latitude is None and longitude is not None
+                latitude is None and longitude is not None
         ):
             raise serializers.ValidationError(
                 "Both latitude and longitude must be provided together."
@@ -89,5 +95,42 @@ class ScenicAreaSerializer(serializers.ModelSerializer):
         """Meta class for ScenicArea model."""
 
         model = ScenicArea
-        fields = ["id", "name", "area_type", "bonus_value", "area"]
+        fields = ["id", "name", "area_type", "bonus_value", "area", "description"]
         read_only_fields = ["id"]
+
+class POIPhotoSerializer(serializers.Serializer):
+    """Serializer for individual POI photos."""
+
+    id = serializers.CharField()
+    url = serializers.URLField()
+    thumbnail = serializers.URLField()
+    width = serializers.IntegerField(required=False, allow_null=True)
+    height = serializers.IntegerField(required=False, allow_null=True)
+    source = serializers.CharField(default='Google Places')
+
+
+class PlaceDetailsSerializer(serializers.Serializer):
+    """Serializer for Google Places details."""
+
+    place_id = serializers.CharField()
+    name = serializers.CharField(required=False, allow_blank=True)
+    formatted_address = serializers.CharField(required=False, allow_blank=True)
+    rating = serializers.FloatField(required=False, allow_null=True)
+    user_ratings_total = serializers.IntegerField(required=False, allow_null=True)
+
+
+class POIPhotosResponseSerializer(serializers.Serializer):
+    """Complete response serializer for POI photos endpoint."""
+
+    photos = POIPhotoSerializer(many=True, default=[])
+    place_details = PlaceDetailsSerializer(required=False, allow_null=True)
+    source = serializers.CharField(default='google_places')
+    configured = serializers.BooleanField(default=True)
+    error = serializers.CharField(required=False, allow_blank=True)
+
+    wikipedia_description = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default='',
+        help_text='Descrizione dal POI (per compatibilità)'
+    )
