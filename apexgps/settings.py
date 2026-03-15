@@ -213,6 +213,7 @@ CORS_ALLOWED_ORIGINS = [
         os.environ.get("LOCAL_PATH1"),
         os.environ.get("LOCAL_PATH2"),
         os.environ.get("REACT_SERVER"),
+        os.environ.get("API_PATH"),
     ]
     if origin
 ]
