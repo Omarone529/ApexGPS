@@ -84,7 +84,7 @@ docker-compose exec web python manage.py migrate
 # Creare un superuser (facoltativo)
 docker compose exec web python manage.py createsuperuser
 
-# L'applicazione sarà disponibile all'indirizzo: http://localhost:8000
+# L'applicazione sarà disponibile all'indirizzo: [http://localhost:8000](https://www.apexgps.qzz.io/)
 
 ### Configurazione Database e Migrazioni
 
