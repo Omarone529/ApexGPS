@@ -8,7 +8,7 @@
 ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
 ![Containerized-Docker](https://img.shields.io/badge/Containerized-Docker-2496ED?logo=docker&logoColor=white)
 
-![Logo](./assets/logo/ApexGPS_logo.png)
+![Logo](./assets/logo/ApexGPS_logo.jpg)
 
 ## 1. Panoramica del Progetto
 
