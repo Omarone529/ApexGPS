@@ -1,8 +1,10 @@
 from rest_framework import viewsets
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
 
 from users.permissions import IsAdminUser, IsRegisteredUser
 
-from .models import PointOfInterest, ScenicArea
+from .models import PointOfInterest, ScenicArea, RoadSegment
 from .serializers import PointOfInterestSerializer, ScenicAreaSerializer
 
 
@@ -45,3 +47,12 @@ class ScenicAreaViewSet(ProtectedResourceViewSet):
 
     queryset = ScenicArea.objects.all()
     serializer_class = ScenicAreaSerializer
+
+@api_view(['GET'])
+def stats_view(request):
+    poi_count = PointOfInterest.objects.filter(is_active=True).count()
+    segment_count = RoadSegment.objects.filter(is_active=True).count()
+    return Response({
+        'poi_count': poi_count,
+        'segment_count': segment_count,
+    })
