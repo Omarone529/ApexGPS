@@ -32,6 +32,7 @@ class APIRootView(APIView):
                     "scenic-areas": reverse(
                         "scenicarea-list", request=request, format=format
                     ),
+                    "stats": reverse("stats", request=request, format=format),
                 },
                 # DEM Data
                 "dem_data": {

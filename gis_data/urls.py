@@ -12,4 +12,5 @@ router.register(r"scenic-areas", views.ScenicAreaViewSet, basename="scenicarea")
 # The API URLs are now determined automatically by the router
 urlpatterns = [
     path("", include(router.urls)),
+    path("stats/", views.stats_view, name="stats"),
 ]
